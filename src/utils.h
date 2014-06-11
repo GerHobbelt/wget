@@ -69,7 +69,6 @@ typedef struct status
   char status[2];
   char percentage[8];
   char speed[8];
-  char download_length[32];
 }status_t;
 /* Foxconn add end, Alex Zhang, 01/03/2013 */
 

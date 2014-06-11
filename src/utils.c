@@ -486,19 +486,12 @@ int update_status_file(char *str, int flag, int pid)
     }
     else if(flag == 4)
     {
-        if(strstr(task_status.filesize,"-1") || strstr(task_status.filesize,"---"))
-            strcpy(task_status.percentage, "---");
-        else
-            strcpy(task_status.percentage, str);
+        strcpy(task_status.percentage, str);
 
     }
     else if(flag == 5)
     {
         strcpy(task_status.speed, str);
-    }
-    else if(flag == 6)
-    {
-        strcpy(task_status.download_length, str);
     }
 #if 0
     printf("\nurl=(%s)\n file_name=(%s)\n file_size=(%s)\n task_status=(%s)\n finish_percent=(%s)\n down_speed=(%s)\n",
@@ -524,7 +517,6 @@ int update_status_file(char *str, int flag, int pid)
     fprintf(fp, "task_status=%s\n", task_status.status);
     fprintf(fp, "finish_percent=%s\n", task_status.percentage);
     fprintf(fp, "down_speed=%s\n", task_status.speed);
-    fprintf(fp, "download_length=%s\n", task_status.download_length);
     fflush(fp);
     fclose(fp); 
     

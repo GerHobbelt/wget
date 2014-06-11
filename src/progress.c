@@ -1000,11 +1000,6 @@ create_image (struct bar_progress *bp, double dl_total_time, bool done)
       sprintf (p, "%4.*f%s", dlspeed >= 99.95 ? 0 : dlspeed >= 9.995 ? 1 : 2,
                dlspeed, short_units[units]);
       update_status_file(p, 5, getpid());//speed
-
-    
-      sprintf (p, "%lld", dlquant);
-      update_status_file(p, 6, getpid());//bytes already download
-
       move_to_end (p);
     }
   else
