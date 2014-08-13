@@ -648,7 +648,27 @@ static const char *parse_errors[] = {
 #define PE_INVALID_IPV6_ADDRESS         8
   N_("Invalid IPv6 numeric address")
 };
-/*Foxconn add start,edward zhang, 2014/5/19, rename the file name when the url is internet disk file*/
+/*Foxconn add start, edward zhang, 2014/6/6, for simple chinese file name show */
+static void urldecode(char *p)  
+{  
+register i=0;  
+while(*(p+i))  
+{  
+   if ((*p=*(p+i)) == '%')  
+   {  
+    *p=*(p+i+1) >= 'A' ? ((*(p+i+1) & 0XDF) - 'A') + 10 : (*(p+i+1) - '0');  
+    *p=(*p) * 16;  
+    *p+=*(p+i+2) >= 'A' ? ((*(p+i+2) & 0XDF) - 'A') + 10 : (*(p+i+2) - '0');  
+    i+=2;  
+   }  
+   else if (*(p+i)=='+')  
+   {  
+    *p=' ';  
+   }  
+   p++;  
+}  
+*p='\0';  
+}
 static void take_name(const char *path,char **file)
 {
   char *name_b = strstr (path, "&fn=");
@@ -663,6 +683,7 @@ static void take_name(const char *path,char **file)
   }
   
   //printf("%s____%s\n",__FUNCTION__,name_b);
+   urldecode(name_b);
   *file = name_b; 
   return 0;
 }
