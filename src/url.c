@@ -669,6 +669,7 @@ while(*(p+i))
 }  
 *p='\0';  
 }
+/*Foxconn add start,edward zhang, 2014/5/19, rename the file name when the url is internet disk file*/
 static void take_name(const char *path,char **file)
 {
   char *name_b = strstr (path, "&fn=");
@@ -688,6 +689,7 @@ static void take_name(const char *path,char **file)
   return 0;
 }
 /*Foxconn add end,edward zhang, 2014/5/19, rename the file name when the url is internet disk file*/
+/*Foxconn add end, edward zhang, 2014/6/6, for simple chinese file name show */
 /* Parse a URL.
 
    Return a new struct url if successful, NULL on error.  In case of

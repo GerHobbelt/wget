@@ -2239,7 +2239,7 @@ File %s already there; not retrieving.\n\n"), quote (hs->local_file));
     hs->contlen = -1;
   else
     hs->contlen = contlen + contrange;
-  /* Foxconn modify end, Alex Zhang, 02/27/2013 */
+
   if (opt.verbose)
     {
       if (*dt & RETROKF)
