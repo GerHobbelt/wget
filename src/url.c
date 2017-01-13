@@ -648,7 +648,7 @@ static const char *parse_errors[] = {
 #define PE_INVALID_IPV6_ADDRESS         8
   N_("Invalid IPv6 numeric address")
 };
-/* add start, edward zhang, 2014/6/6, for simple chinese file name show */
+/*Foxconn add start, edward zhang, 2014/6/6, for simple chinese file name show */
 static void urldecode(char *p)  
 {  
 register i=0;  
@@ -669,7 +669,7 @@ while(*(p+i))
 }  
 *p='\0';  
 }
-/* add start,edward zhang, 2014/5/19, rename the file name when the url is internet disk file*/
+/*Foxconn add start,edward zhang, 2014/5/19, rename the file name when the url is internet disk file*/
 static void take_name(const char *path,char **file)
 {
   char *name_b = strstr (path, "&fn=");
@@ -688,8 +688,8 @@ static void take_name(const char *path,char **file)
   *file = name_b; 
   return 0;
 }
-/* add end,edward zhang, 2014/5/19, rename the file name when the url is internet disk file*/
-/* add end, edward zhang, 2014/6/6, for simple chinese file name show */
+/*Foxconn add end,edward zhang, 2014/5/19, rename the file name when the url is internet disk file*/
+/*Foxconn add end, edward zhang, 2014/6/6, for simple chinese file name show */
 /* Parse a URL.
 
    Return a new struct url if successful, NULL on error.  In case of
@@ -908,7 +908,7 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
   u->path = strdupdelim (path_b, path_e);
   path_modified = path_simplify (scheme, u->path);
   split_path (u->path, &u->dir, &u->file);
-  /* add,edward zhang, 2014/5/19, rename the file name when the url is internet disk file*/
+  /*Foxconn add,edward zhang, 2014/5/19, rename the file name when the url is internet disk file*/
   if (strstr(path_b,"&fn="))
     take_name(path_b,&u->file);
   host_modified = lowercase_str (u->host);

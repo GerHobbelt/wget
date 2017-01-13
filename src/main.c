@@ -774,7 +774,7 @@ format_and_print_line (const char *prefix, const char *line,
   xfree (line_dup);
 }
 
-/*  modify start, Jesse Chen, 05/16/2013 @ http/ftp download*/
+/* Foxconn modify start, Jesse Chen, 05/16/2013 @ http/ftp download*/
 #define MAX_XSS_CONVERT_LEN 5   /* strlen("&#40;") */
 static int decode_url(char *str_in_out, unsigned int str_out_len)
 {
@@ -823,7 +823,7 @@ static int decode_url(char *str_in_out, unsigned int str_out_len)
 out:
     return ret;
 }
-/*  modify start, Jesse Chen, 05/16/2013 @ http/ftp download*/
+/* Foxconn modify start, Jesse Chen, 05/16/2013 @ http/ftp download*/
 
 static void
 print_version (void)
@@ -1054,9 +1054,9 @@ main (int argc, char **argv)
     }
 
   nurl = argc - optind;
-  /*  modify start, Jesse Chen, 05/16/2013 @ http/ftp download*/
+  /* Foxconn modify start, Jesse Chen, 05/16/2013 @ http/ftp download*/
   decode_url(argv[optind],strlen(argv[optind]));
-  /*  modify start, Jesse Chen, 05/16/2013 @ http/ftp download*/
+  /* Foxconn modify start, Jesse Chen, 05/16/2013 @ http/ftp download*/
   /* All user options have now been processed, so it's now safe to do
      interoption dependency checks. */
 

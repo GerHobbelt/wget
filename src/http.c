@@ -1443,7 +1443,7 @@ gethttp (struct url *u, struct http_stat *hs, int *dt, struct url *proxy,
   wgint post_data_size = 0;
 
   bool host_lookup_failed = false;
-  /*  modify start, Alex Zhang, 02/27/2013 */
+  /* Foxconn modify start, Alex Zhang, 02/27/2013 */
   int pid_tag = getpid();
   if(create_mission_folder(pid_tag) == -1)
     return FWRITEERR;
@@ -2239,7 +2239,7 @@ File %s already there; not retrieving.\n\n"), quote (hs->local_file));
     hs->contlen = -1;
   else
     hs->contlen = contlen + contrange;
-  /*  modify end, Alex Zhang, 02/27/2013 */
+  /* Foxconn modify end, Alex Zhang, 02/27/2013 */
   if (opt.verbose)
     {
       if (*dt & RETROKF)
@@ -2382,7 +2382,7 @@ File %s already there; not retrieving.\n\n"), quote (hs->local_file));
   xfree (head);
 
   /* Download the request body.  */
-  /*  add start, Alex Zhang, 01/29/2013 */
+  /* Foxconn add start, Alex Zhang, 01/29/2013 */
   if(contlen == 0)
   {
      CLOSE_FINISH (sock);
@@ -2390,7 +2390,7 @@ File %s already there; not retrieving.\n\n"), quote (hs->local_file));
        fclose (fp);
      return RETRFINISHED;
   }
-  /*  add end, Alex Zhang, 01/29/2013 */
+  /* Foxconn add end, Alex Zhang, 01/29/2013 */
   flags = 0;
   if (contlen != -1)
     /* If content-length is present, read that much; otherwise, read

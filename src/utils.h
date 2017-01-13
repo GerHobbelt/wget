@@ -60,7 +60,7 @@ struct file_memory {
   long length;
   int mmap_p;
 };
-/*  add start, Alex Zhang, 01/03/2013 */
+/* Foxconn add start, Alex Zhang, 01/03/2013 */
 typedef struct status
 {
   char url[1024];
@@ -68,9 +68,10 @@ typedef struct status
   char filesize[64];
   char status[2];
   char percentage[8];
-  char speed[8];
+  char speed[16];
+  char download_length[32];
 }status_t;
-/*  add end, Alex Zhang, 01/03/2013 */
+/* Foxconn add end, Alex Zhang, 01/03/2013 */
 
 #define HYPHENP(x) (*(x) == '-' && !*((x) + 1))
 
@@ -83,12 +84,12 @@ char *strdupdelim (const char *, const char *);
 char **sepstring (const char *);
 bool subdir_p (const char *, const char *);
 void fork_to_background (void);
-/*  add start, Alex Zhang, 01/03/2013 */
+/* Foxconn add start, Alex Zhang, 01/03/2013 */
 int update_status_file(char *str, int flag, int pid);
 int create_mission_folder(int pid);
 void tr_wait_msec( long int msec );
 int calc_ftp_percentage(char *str, char *per);
-/*  add end, Alex Zhang, 01/03/2013 */
+/* Foxconn add end, Alex Zhang, 01/03/2013 */
 char *aprintf (const char *, ...) GCC_FORMAT_ATTR (1, 2);
 char *concat_strings (const char *, ...);
 

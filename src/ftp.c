@@ -1356,7 +1356,7 @@ ftp_loop_internal (struct url *u, struct fileinfo *f, ccon *con)
   const char *tmrate = NULL;
   uerr_t err;
   struct_stat st;
-  /*  modify start, Alex Zhang, 02/27/2013 */
+  /* Foxconn modify start, Alex Zhang, 02/27/2013 */
   int pid_tag =getpid();
   if(create_mission_folder(pid_tag) == -1)
       return FWRITEERR;
