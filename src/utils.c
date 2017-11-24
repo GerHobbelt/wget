@@ -570,9 +570,20 @@ fork_to_background (void)
 #else /* def __VMS */
 
 #if !defined(WINDOWS) && !defined(MSDOS)
+
+void set_pid_to_nvram(pid_t pid)
+{
+    char cmd[32];
+
+    memset(cmd, 0, sizeof(cmd));
+    snprintf(cmd, sizeof(cmd), "nvram set wget_verchk_pid=%d", (int)pid);  system(cmd);
+    printf (_("[wget] %s.\n"), cmd);
+}
+
 void
 fork_to_background (void)
 {
+  char cmd[32];
   pid_t pid;
   /* Whether we arrange our own version of opt.lfilename here.  */
   bool logfile_changed = false;
@@ -600,6 +611,7 @@ fork_to_background (void)
     }
   else if (pid != 0)
     {
+      set_pid_to_nvram(pid);
       /* parent, no error */
       printf (_("Continuing in background, pid %d.\n"), (int) pid);
       if (logfile_changed)
