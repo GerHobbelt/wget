@@ -465,7 +465,8 @@ int update_status_file(char *str, int flag, int pid)
     char status_file[64]="";
     int wget_pid = 0;
     char buf1[1024]="";
-    
+    static int lock = 1;
+
     if(flag == 0)
     {
         strcpy(task_status.url, str);
@@ -500,6 +501,10 @@ int update_status_file(char *str, int flag, int pid)
     {
         strcpy(task_status.download_length, str);
     }
+    else if(flag == 7)
+    {
+        lock = atoi(str);
+    }
 #if 0
     printf("\nurl=(%s)\n file_name=(%s)\n file_size=(%s)\n task_status=(%s)\n finish_percent=(%s)\n down_speed=(%s)\n",
            task_status.url,
@@ -510,6 +515,8 @@ int update_status_file(char *str, int flag, int pid)
            task_status.speed            
            );    
 #endif
+    if(lock == 1)
+    {
     tr_wait_msec(50);
     sprintf(status_file, "/var/run/down/mission_%d/status", pid);
     fp = fopen(status_file, "w+");
@@ -527,6 +534,7 @@ int update_status_file(char *str, int flag, int pid)
     fprintf(fp, "download_length=%s\n", task_status.download_length);
     fflush(fp);
     fclose(fp); 
+    }
     
     return 0;
 }

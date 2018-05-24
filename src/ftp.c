@@ -257,6 +257,9 @@ getftp (struct url *u, wgint passed_expected_bytes, wgint *qtyread,
   wgint rd_size;
   char type_char;
 
+  bool got_expected_bytes = false;
+
+
   assert (con != NULL);
   assert (con->target != NULL);
 
@@ -755,6 +758,7 @@ Error in server response, closing control connection.\n"));
           con->csock = -1;
           return err;
         case FTPOK:
+		  got_expected_bytes = true;
           /* Everything is OK.  */
           break;
         default:
@@ -1019,7 +1023,8 @@ Error in server response, closing control connection.\n"));
 
       if (!opt.server_response)
         logputs (LOG_VERBOSE, _("done.\n"));
-      expected_bytes = ftp_expected_bytes (ftp_last_respline);
+	  if (! got_expected_bytes) 
+        expected_bytes = ftp_expected_bytes (ftp_last_respline);
     } /* do retrieve */
 
   if (cmd & DO_LIST)
@@ -1065,6 +1070,7 @@ Error in server response, closing control connection.\n"));
         }
       if (!opt.server_response)
         logputs (LOG_VERBOSE, _("done.\n"));
+	  if (! got_expected_bytes)
       expected_bytes = ftp_expected_bytes (ftp_last_respline);
     } /* cmd & DO_LIST */
 

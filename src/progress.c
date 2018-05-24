@@ -861,7 +861,9 @@ create_image (struct bar_progress *bp, double dl_total_time, bool done)
   int size_grouped_pad; /* Used to pad the field width for size_grouped. */
 
   struct bar_progress_hist *hist = &bp->hist;
-
+  
+  update_status_file("0", 7, getpid());  /* Foxconn modify, Jesse Chen@ Reduce frequency of write status file when create image, 02/09/2017 */
+  
   /* The progress bar should look like this:
      xx% [=======>             ] nn,nnn 12.34K/s  eta 36m 51s
 
@@ -1078,6 +1080,8 @@ create_image (struct bar_progress *bp, double dl_total_time, bool done)
   while (p - bp->buffer - bytes_cols_diff - size_grouped_diff < bp->width)
     *p++ = ' ';
   *p = '\0';
+  
+  update_status_file("1", 7, getpid());  /* Foxconn modify, Jesse Chen@ Reduce frequency of write status file when create image, 02/09/2017 */
 }
 
 /* Print the contents of the buffer as a one-line ASCII "image" so
