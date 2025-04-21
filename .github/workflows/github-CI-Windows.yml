@@ -8,19 +8,23 @@ jobs:
   # https://github.com/actions/runner-images/blob/main/images/win/scripts/Installers/Install-Msys2.ps1
   # https://github.com/actions/runner-images/tree/main/images/win/toolsets
   build:
-    # https://docs.github.com/en/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    # https://docs.github.com/en/actions/writing-workflows
     strategy:
       matrix:
         #os: [ubuntu-latest, windows-latest] # run native test
-        bits: [32, 64]
+        sys: [mingw64, mingw32, ucrt64]
         ftype: [vista-wintls-winhashes-shared-full, vista-wintls-winhashes-static-lite, xp-openssl-lite]
+        include:
+          - sys: mingw64
+            env: x86_64
+          - sys: mingw32
+            env: i686
+          - sys: ucrt64
+            env: ucrt-x86_64
       fail-fast: false
     # https://github.com/actions/runner-images
-    name: mingw${{matrix.bits}}-${{matrix.ftype}}
+    name: ${{matrix.sys}}-${{matrix.ftype}}
     runs-on: windows-latest
-    env:
-      mingw: mingw${{matrix.bits}}
-      build_type: ${{matrix.ftype}}
     defaults:
       run:
         shell: msys2 {0}
@@ -31,15 +35,12 @@ jobs:
         # Explicitly enable year2038:
         # gnulib requires `-D__MINGW_USE_VC2005_COMPAT` for `time_t` from `year2038.m4` and `largefile.m4`.
         # gnulib/doc/posix-headers/sys_time.texi
-        case "${mingw}" in
-          mingw32) arch="i686"; echo CFLAGS="-D__MINGW_USE_VC2005_COMPAT=1" >> $GITHUB_ENV ;;
-          mingw64) arch="x86_64" ;;
-          *) exit 1 ;;
+        case "${{matrix.sys}}" in
+          mingw32) echo CFLAGS="-D__MINGW_USE_VC2005_COMPAT=1" >> $GITHUB_ENV ;;
         esac
         BRoot="${PWD}"
-        BDir="build/${build_type}/${mingw}"
+        BDir="build/${{matrix.ftype}}/${{matrix.sys}}"
         CDir="${BDir}-config"
-        echo arch="$arch" >> $GITHUB_ENV
         echo BRoot="$BRoot" >> $GITHUB_ENV
         echo BDir="$BDir" >> $GITHUB_ENV
         echo CDir="$CDir" >> $GITHUB_ENV
@@ -48,13 +49,13 @@ jobs:
     - name: Set up MSYS2
       uses: msys2/setup-msys2@v2
       with:
-        msystem: ${{env.mingw}}
+        msystem: ${{matrix.sys}}
         release: false
         path-type: inherit
         # `AX_CODE_COVERAGE` requires autoconf-archive: https://github.com/google/oss-fuzz/pull/5379/files
         # gpgme for metalink, but depends on many others, that's not preferred on windows
         # gettext for NLS, expat for metalink, libidn2 and libunistring for libpsl
-        # mingw-w64-${{env.arch}}-libmetalink is removed from MSYS2 repo, compile and install it ourself.
+        # libmetalink is removed from MSYS2 repo, compile and install it ourself.
         # pacman group: https://packages.msys2.org/group/
         install: >-
           pkgconf
@@ -65,13 +66,13 @@ jobs:
           autoconf-archive
           perl-libwww
           libcares-devel
-          mingw-w64-${{env.arch}}-gcc
-          mingw-w64-${{env.arch}}-expat
-          mingw-w64-${{env.arch}}-gpgme
-          mingw-w64-${{env.arch}}-libpsl
-          mingw-w64-${{env.arch}}-libidn2
-          mingw-w64-${{env.arch}}-libunistring
-          mingw-w64-${{env.arch}}-gettext
+          mingw-w64-${{matrix.env}}-gcc
+          mingw-w64-${{matrix.env}}-expat
+          mingw-w64-${{matrix.env}}-gpgme
+          mingw-w64-${{matrix.env}}-libpsl
+          mingw-w64-${{matrix.env}}-libidn2
+          mingw-w64-${{matrix.env}}-libunistring
+          mingw-w64-${{matrix.env}}-gettext
 
       # MinGW-w64 pre-installed
     - name: Show setup result
@@ -143,15 +144,15 @@ jobs:
           sed -i "s/libiconv/iconv/" CMakeLists.txt
           # introduced `locale_charset()` which conflicts with GNU lib
           sed -i "s/locale_charset/locale__charset/" win_iconv.c
-          cmake -G "MSYS Makefiles" -D WIN_ICONV_BUILD_SHARED=OFF -D CMAKE_INSTALL_PREFIX=/$mingw .
+          cmake -G "MSYS Makefiles" -D WIN_ICONV_BUILD_SHARED=OFF -D CMAKE_INSTALL_PREFIX=/${{matrix.sys}} .
           # cat ./cmake_install.cmake
-          make -E CFLAGS=-Os -E prefix=/$mingw install
+          make -E CFLAGS=-Os -E prefix=/${{matrix.sys}} install
           if [ "${{matrix.ftype}}" = "xp-openssl-lite" ]; then
             cd ..
             wget https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz
             tar -xvzf openssl-1.1.1w.tar.gz
             cd openssl-1.1.1w
-            CFLAGS='-Wall -Os -fomit-frame-pointer' LDFLAGS=-s ./config --api=1.1.0 --prefix=/$mingw -static \
+            CFLAGS='-Wall -Os -fomit-frame-pointer' LDFLAGS=-s ./config --api=1.1.0 --prefix=/${{matrix.sys}} -static \
               -no-shared --release \
               enable-aria enable-asm enable-async enable-camellia enable-chacha enable-ct enable-deprecated \
               enable-des enable-dh enable-ec enable-ecdh enable-ecdsa enable-gost enable-md4 enable-multiblock \
@@ -229,7 +230,7 @@ jobs:
       uses: actions/upload-artifact@v4
       if: ${{success()}} || ${{failure()}}
       with:
-        name: wget-${{env.mingw}}-${{env.build_type}}_${{github.head_ref || github.ref_name}}_${{env.SHA}}
+        name: wget-${{matrix.sys}}-${{matrix.ftype}}_${{github.head_ref || github.ref_name}}_${{env.SHA}}
         path: |
           ${{env.CDir}}/src/wget.exe
 
@@ -237,7 +238,7 @@ jobs:
       uses: actions/upload-artifact@v4
       if: ${{failure()}}
       with:
-        name: wget-${{env.mingw}}-${{env.build_type}}-logs
+        name: wget-${{matrix.sys}}-${{matrix.ftype}}-logs
         # Previous steps can be stuck and then timeout, so all `.log` files and sub-folders.
         path: |
           ${{env.CDir}}/config.log
@@ -257,7 +258,7 @@ jobs:
       if: ${{ startsWith(github.ref, 'refs/tags/') && endsWith(matrix.ftype, '-lite') }}
       run: |
         cd ${{env.CDir}}/src
-        "/C/Program Files/7-Zip/7z" a wget-${{env.mingw}}-${{env.build_type}}_${{github.head_ref || github.ref_name}}_${{env.SHA}}.7z wget.exe
+        "/C/Program Files/7-Zip/7z" a wget-${{matrix.sys}}-${{matrix.ftype}}_${{github.head_ref || github.ref_name}}_${{env.SHA}}.7z wget.exe
 
     - name: Upload release assets
       uses: softprops/action-gh-release@v2
@@ -265,4 +266,4 @@ jobs:
       with:
         draft: true
         files: |
-          ${{env.CDir}}/src/wget-${{env.mingw}}-${{env.build_type}}_${{github.head_ref || github.ref_name}}_${{env.SHA}}.7z
+          ${{env.CDir}}/src/wget-${{matrix.sys}}-${{matrix.ftype}}_${{github.head_ref || github.ref_name}}_${{env.SHA}}.7z
