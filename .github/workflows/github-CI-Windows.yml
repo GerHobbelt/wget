@@ -138,14 +138,10 @@ jobs:
           ./configure --disable-xmltest
           make install
         else
-          wget https://github.com/win-iconv/win-iconv/archive/refs/tags/v0.0.9.tar.gz
-          tar -xvzf v0.0.9.tar.gz
-          cd win-iconv-0.0.9
-          sed -i "s/libiconv/iconv/" CMakeLists.txt
-          # introduced `locale_charset()` which conflicts with GNU lib
-          sed -i "s/locale_charset/locale__charset/" win_iconv.c
-          cmake -G "MSYS Makefiles" -D WIN_ICONV_BUILD_SHARED=OFF -D CMAKE_INSTALL_PREFIX=/${{matrix.sys}} .
-          # cat ./cmake_install.cmake
+          wget https://github.com/win-iconv/win-iconv/archive/refs/tags/v0.0.10.tar.gz
+          tar -xvzf v0.0.10.tar.gz
+          cd win-iconv-0.0.10
+          cmake -G "MSYS Makefiles" -D WIN_ICONV_BUILD_SHARED=OFF -D DISABLE_LOCALE_CHARSET=ON -D CMAKE_INSTALL_PREFIX=/${{matrix.sys}} .
           make -E CFLAGS=-Os -E prefix=/${{matrix.sys}} install
           if [ "${{matrix.ftype}}" = "xp-openssl-lite" ]; then
             cd ..
