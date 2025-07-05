@@ -1017,7 +1017,9 @@ retrieve_url (struct url * orig_parsed, char **file,
 
       newloc_parsed = url_new_init ();
       newloc_parsed->ori_url = xstrdup (mynewloc);
+#ifdef HAVE_ICONV
       newloc_parsed->ori_enc = xstrdup (u->ori_enc);
+#endif
       if (u->content_enc)
         newloc_parsed->content_enc = xstrdup (u->content_enc);
 
