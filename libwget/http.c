@@ -151,6 +151,11 @@ wget_http_request *wget_http_create_request(const wget_iri *iri, const char *met
 	req->scheme = iri->scheme;
 	wget_strscpy(req->method, method, sizeof(req->method));
 	wget_iri_get_escaped_resource(iri, &req->esc_resource);
+	debug_printf("escaped resource %s", req->esc_resource.data);
+	debug_printf("escaped resource %s", iri->safe_uri);
+	debug_printf("escaped resource %s", iri->uri);
+	debug_printf("escaped resource %s", iri->path);
+
 	if (wget_ip_is_family(iri->host, WGET_NET_FAMILY_IPV6))
 		wget_buffer_printf(&req->esc_host, "[%s]", iri->host);
 	else

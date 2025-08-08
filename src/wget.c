@@ -842,11 +842,11 @@ static void queue_url_from_remote(JOB *job, const char *encoding, const char *ur
 
 	if (p) {
 		char *url_cut = wget_strmemdup(url, p - url);
-		iri = wget_iri_parse(url_cut, encoding);
+		iri = wget_iri_parse_ex(url_cut, encoding, flags&URL_FLG_REDIRECTION ? WGET_IRI_KEEP_AS_IS : 0);
 		xfree(url_cut);
 	}
 	else
-		iri = wget_iri_parse(url, encoding);
+		iri = wget_iri_parse_ex(url, encoding, flags&URL_FLG_REDIRECTION ? WGET_IRI_KEEP_AS_IS : 0);
 
 	if (!iri) {
 		info_printf(_("Cannot resolve URI\n"));
@@ -1908,7 +1908,7 @@ static int process_response_header(wget_http_response *resp)
 		wget_cookie_normalize_cookies(job->iri, resp->cookies);
 		wget_cookie_store_cookies(config.cookie_db, resp->cookies);
 
-		wget_buffer uri_buf;
+/*		wget_buffer uri_buf;
 		char uri_sbuf[1024];
 		wget_buffer_init(&uri_buf, uri_sbuf, sizeof(uri_sbuf));
 
@@ -1917,6 +1917,7 @@ static int process_response_header(wget_http_response *resp)
 			queue_url_from_remote(job, "utf-8", uri_buf.data, URL_FLG_REDIRECTION, NULL);
 
 		wget_buffer_deinit(&uri_buf);
+ */
 	}
 
 	return 0;
