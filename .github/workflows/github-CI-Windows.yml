@@ -1,0 +1,255 @@
+name: wget-for-windows CI
+
+on: [push, pull_request]
+
+jobs:
+  # Customize the env and configure args
+  # windows-2022 installs only pure MSYS2: https://github.com/actions/virtual-environments/issues/1572#issuecomment-908941444
+  # https://github.com/actions/virtual-environments/blob/main/images/win/scripts/Installers/Install-Msys2.ps1
+  # https://github.com/actions/virtual-environments/tree/main/images/win/toolsets
+  build:
+    # https://docs.github.com/en/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    strategy:
+      matrix:
+        #os: [ubuntu-latest, windows-latest] # run native test
+        bits: [32, 64]
+        ftype: [vista-wintls-winhashes-shared-full, vista-wintls-winhashes-static-lite, xp-openssl-lite]
+      fail-fast: false
+    # https://github.com/actions/virtual-environments
+    name: mingw${{matrix.bits}}-${{matrix.ftype}}
+    runs-on: windows-latest
+    env:
+      mingw: mingw${{matrix.bits}}
+      build_type: ${{matrix.ftype}}
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+    - name: Set up ENVs for MSYS2 to inherit
+      shell: bash
+      run: |
+        # Explicitly enable year2038:
+        # gnulib requires `-D__MINGW_USE_VC2005_COMPAT` for `time_t` from `year2038.m4` and `largefile.m4`.
+        # gnulib/doc/posix-headers/sys_time.texi
+        case "${mingw}" in
+          mingw32) arch="i686"; echo CFLAGS="-D__MINGW_USE_VC2005_COMPAT=1" >> $GITHUB_ENV ;;
+          mingw64) arch="x86_64" ;;
+          *) exit 1 ;;
+        esac
+        BRoot="${PWD}"
+        BDir="build/${build_type}/${mingw}"
+        CDir="${BDir}-config"
+        echo arch="$arch" >> $GITHUB_ENV
+        echo BRoot="$BRoot" >> $GITHUB_ENV
+        echo BDir="$BDir" >> $GITHUB_ENV
+        echo CDir="$CDir" >> $GITHUB_ENV
+
+      # https://github.com/msys2/setup-msys2
+    - name: Set up MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: ${{env.mingw}}
+        release: false
+        #path-type: inherit
+        # `AX_CODE_COVERAGE` requires autoconf-archive: https://github.com/google/oss-fuzz/pull/5379/files
+        # gpgme for metalink, but depends on many others, that's not preferred on windows
+        # gettext for NLS, expat for metalink, libidn2 and libunistring for libpsl
+        # mingw-w64-${{env.arch}}-libmetalink is removed from MSYS2 repo, compile and install it ourself.
+        # pacman group: https://packages.msys2.org/group/
+        install: >-
+          base-devel
+          gperf
+          autoconf
+          automake
+          autoconf-archive
+          git
+          python
+          libcares-devel
+          mingw-w64-${{env.arch}}-gcc
+          mingw-w64-${{env.arch}}-expat
+          mingw-w64-${{env.arch}}-gpgme
+          mingw-w64-${{env.arch}}-libpsl
+          mingw-w64-${{env.arch}}-libidn2
+          mingw-w64-${{env.arch}}-libunistring
+          mingw-w64-${{env.arch}}-gettext
+
+      # MinGW-w64 pre-installed
+    - name: Show setup result
+      run: |
+        echo "ls /"
+        ls /
+        echo "bash --version"
+        bash --version
+        echo "gcc -v"
+        gcc -v
+        git --version
+        python -V
+        python -c "import sys; print(sys.executable)"
+        python3 -V
+        python3 -c "import sys; print(sys.executable)"
+        perl -e 'print $^O . "\n"'
+        pwd
+        echo "PATH"
+        echo "$PATH"
+        echo "$BRoot"
+        echo "$BDir"
+        echo "$CDir"
+
+    - uses: actions/checkout@v4
+      # Shallow fetch makes version unknown: git describe --abbrev=4 --match="$prefix*" HEAD
+      with:
+        fetch-depth: 0
+
+      # gettext-0.20 issue: https://github.com/coreutils/gnulib/blob/master/build-aux/po/Makefile.in.in#L11
+      # gettext and gettext-devel v0.20 is not available on MSYS2
+      # wget => gnulib_po => gnulib/build-aux/po/Makefile.in.in, po/Makefile.in.in from MSYS2 gettext
+    - name: Generate configure
+      run: |
+        loc_ver=$(gettext -V | sed -n "s/gettext[^0-9]\+\([0-9.]\+\).*/\1/p")
+        req_ver=$(sed -n "s/^\gettext\s\+\([0-9.]\+\)$/\1/mp" bootstrap.conf)
+        if [ -n "${req_ver}" ] && [ ${loc_ver} \< ${req_ver} ]; then
+          echo "Reset gettext version: bootstrap.conf requires "${req_ver}", local is "${loc_ver}
+          sed -i "s/^\(gettext\s\+\)[0-9.]\+$/\1${loc_ver}/gm" bootstrap.conf
+        fi
+        req_ver=$(sed -n "s/^AM_GNU_GETTEXT_VERSION(\[\([0-9.]\+\)\])$/\1/mp" configure.ac)
+        if [ -n "${req_ver}" ] && [ ${loc_ver} \< ${req_ver} ]; then
+          echo "Reset gettext version: configure.ac requires "${req_ver}", local is "${loc_ver}
+          sed -i "s/^\(AM_GNU_GETTEXT_VERSION(\[\)[0-9.]\+\(\])\)$/\1${loc_ver}\2/gm" configure.ac
+        fi
+        ./bootstrap --skip-po
+        sed -i "s/-dirty\b//p" configure
+
+# -->
+    - name: Install extra dependencies
+      run: |
+        if [ "${{matrix.ftype}}" = "vista-wintls-winhashes-shared-full" ]; then
+          wget https://github.com/metalink-dev/libmetalink/releases/download/release-0.1.3/libmetalink-0.1.3.tar.gz
+          tar -xvzf libmetalink-0.1.3.tar.gz
+          cd libmetalink-0.1.3
+          ./configure --disable-xmltest
+          make install
+        else
+          wget https://github.com/win-iconv/win-iconv/archive/refs/tags/v0.0.8.tar.gz
+          tar -xvzf v0.0.8.tar.gz
+          cd win-iconv-0.0.8
+          make -E CFLAGS=-Os -E prefix=/$mingw install
+          if [ "${{matrix.ftype}}" = "xp-openssl-lite" ]; then
+            cd ..
+            wget https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz
+            tar -xvzf openssl-1.1.1w.tar.gz
+            cd openssl-1.1.1w
+            CFLAGS='-Wall -Os -fomit-frame-pointer' LDFLAGS=-s ./config --api=1.1.0 --prefix=/$mingw -static \
+              -no-shared --release \
+              enable-aria enable-asm enable-async enable-camellia enable-chacha enable-ct enable-deprecated \
+              enable-des enable-dh enable-ec enable-ecdh enable-ecdsa enable-gost enable-md4 enable-multiblock \
+              enable-pinshared enable-poly1305 enable-psk enable-rfc3779 enable-sock enable-srp enable-sse2 \
+              enable-stdio enable-tls enable-ts enable-ui-console \
+              no-afalgeng no-asan no-autoalginit no-autoerrinit no-autoload-config no-bf no-blake2 no-buildtest-c++ \
+              no-capieng no-cast no-cmac no-cms no-comp no-crypto-mdebug no-crypto-mdebug-backtrace no-devcryptoeng \
+              no-dgram no-dsa no-dtls no-dynamic-engine no-ec2m no-ec_nistp_64_gcc_128 no-egd no-engine no-err \
+              no-external-tests no-filenames no-fuzz-afl no-fuzz-libfuzzer no-heartbeats no-hw no-idea no-makedepend \
+              no-md2 no-mdc2 no-msan no-nextprotoneg no-ocb no-ocsp no-pic no-posix-io no-rc2 no-rc4 no-rc5 no-rdrand \
+              no-rmd160 no-scrypt no-sctp no-seed no-shared no-siphash no-sm2 no-sm3 no-sm4 no-srtp no-ssl \
+              no-ssl-trace no-static-engine no-tests no-threads no-ubsan no-unit-test no-weak-ssl-ciphers no-whirlpool \
+              no-zlib no-zlib-dynamic
+            make install_dev
+          fi
+        fi
+
+    - name: configure
+      run: |
+        mkdir -p $BDir
+        mkdir -p $CDir
+        cd $CDir
+        pwd
+        export CFLAGS+=" -Wall -DGNULIB_defined_ESOCK"
+        if [ "${{matrix.ftype}}" = "vista-wintls-winhashes-shared-full" ]; then
+          CFLAGS+=" -D_WIN32_WINNT=0x0600 -O2" $BRoot/configure --prefix=$BRoot/$BDir --disable-rpath --with-cares \
+            --with-winidn --enable-threads=windows
+        elif [ "${{matrix.ftype}}" = "vista-wintls-winhashes-static-lite" ]; then
+          CFLAGS+=" -D_WIN32_WINNT=0x0600 -Os" LDFLAGS="-static -s" $BRoot/configure --prefix=$BRoot/$BDir \
+            --disable-debug --disable-rpath --disable-nls --without-libpsl --without-metalink --disable-pcre \
+            --disable-pcre2 --with-winidn --enable-threads=windows
+        elif [ "${{matrix.ftype}}" = "xp-openssl-lite" ]; then
+          # -DNTDDI_VERSION=NTDDI_WINXPSP3 for winhashes
+          CFLAGS+=" -D_WIN32_WINNT=0x0501 -Os" LDFLAGS="-static -s" $BRoot/configure --prefix=$BRoot/$BDir \
+            --with-ssl=openssl --without-winhashes \
+            --disable-debug --disable-rpath --disable-nls --without-libpsl --without-metalink --disable-pcre \
+            --disable-pcre2 --with-winidn --enable-threads=windows
+        fi
+# <--
+
+      # gnulib_po gettext requires gettext version 0.20 higher env can have!
+    - name: Build
+      run: |
+        cd $CDir
+        echo -e "all:\n\n" > gnulib_po/Makefile
+        make
+
+    - name: Show compiled wget info
+      run: |
+        ls -l $CDir/src/wget.exe
+        SHA=$(sha1sum $CDir/src/wget.exe | cut -b 1-40)
+        echo SHA="$SHA" >> $GITHUB_ENV
+        $CDir/src/wget -V
+
+    - name: fuzz
+      run: |
+        cd $CDir/fuzz
+        make check
+
+    - name: testenv
+      if: ${{success()}} || ${{failure()}}
+      run: |
+        cd $CDir/testenv
+        make check
+      timeout-minutes: 5 # in case of stuck
+
+    - name: tests
+      if: ${{success()}} || ${{failure()}}
+      run: |
+        cd $CDir/tests
+        make check
+      timeout-minutes: 5 # in case of stuck
+
+    - name: Upload wget
+      uses: actions/upload-artifact@v4
+      if: ${{success()}} || ${{failure()}}
+      with:
+        name: wget-${{env.mingw}}-${{env.build_type}}_${{github.head_ref || github.ref_name}}_${{env.SHA}}
+        path: |
+          ${{env.CDir}}/src/wget.exe
+
+    - name: Upload logs
+      uses: actions/upload-artifact@v4
+      if: ${{failure()}}
+      with:
+        name: wget-${{env.mingw}}-${{env.build_type}}-logs
+        # Previous steps can be stuck and then timeout, so all `.log` files and sub-folders.
+        path: |
+          ${{env.CDir}}/config.log
+          ${{env.CDir}}/lib/libgnu.a
+          ${{env.CDir}}/src/libunittest.a
+          ${{env.CDir}}/fuzz/*.log
+          ${{env.CDir}}/fuzz/Makefile
+          ${{env.CDir}}/testenv/
+          ${{env.CDir}}/tests/*.log
+          ${{env.CDir}}/tests/Makefile
+          ${{env.CDir}}/tests/**/
+          !${{env.CDir}}/tests/.deps/
+          !${{env.CDir}}/tests/*.exe
+          !${{env.CDir}}/tests/*.o
+
+    - name: Package release assets
+      if: ${{ startsWith(github.ref, 'refs/tags/') && endsWith(matrix.ftype, '-lite') }}
+      run: |
+        cd ${{env.CDir}}/src
+        "/C/Program Files/7-Zip/7z" a wget-${{env.mingw}}-${{env.build_type}}_${{github.head_ref || github.ref_name}}_${{env.SHA}}.7z wget.exe
+
+    - name: Upload release assets
+      uses: softprops/action-gh-release@v2
+      if: ${{ startsWith(github.ref, 'refs/tags/') && endsWith(matrix.ftype, '-lite') }}
+      with:
+        draft: true
+        files: |
+          ${{env.CDir}}/src/wget-${{env.mingw}}-${{env.build_type}}_${{github.head_ref || github.ref_name}}_${{env.SHA}}.7z

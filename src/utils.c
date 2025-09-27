@@ -30,7 +30,11 @@ as that of the covered work.  */
 
 #include "wget.h"
 
-#include "sha256.h"
+# ifdef HAVE_WINHASHES
+# include "win-hashes.h"
+# else
+# include "sha256.h"
+# endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -561,7 +565,7 @@ file_exists_p (const char *filename, file_stats_t *fstats)
   struct stat buf;
 
   if (!filename)
-	  return false;
+    return false;
 
 #if defined(WINDOWS) || defined(__VMS)
     int ret = stat (filename, &buf);
@@ -972,7 +976,7 @@ make_directory (const char *directory)
     {
       memcpy(buf, directory, len + 1);
       dir = buf;
-	}
+    }
   else
     dir = xstrdup(directory);
 
@@ -999,7 +1003,7 @@ make_directory (const char *directory)
     }
 
   if (dir != buf)
-	  xfree (dir);
+    xfree (dir);
 
   return ret;
 }
@@ -1011,7 +1015,7 @@ make_directory (const char *directory)
    file_merge("/foo/bar/", "baz") => "/foo/bar/baz"
    file_merge("foo", "bar")       => "bar"
 
-   In other words, it's a simpler and gentler version of uri_merge.  */
+   In other words, it's a simpler and gentler version of url_merge.  */
 
 char *
 file_merge (const char *base, const char *file)
@@ -1573,13 +1577,13 @@ string_set_free (struct hash_table *ht)
 /* Utility function: simply call xfree() on all keys and values of HT.  */
 
 void
-free_keys_and_values (struct hash_table *ht)
+free_keys_and_values (struct hash_table *ht, VALUE_FREE_FUNC *free_func)
 {
   hash_table_iterator iter;
   for (hash_table_iterate (ht, &iter); hash_table_iter_next (&iter); )
     {
       xfree (iter.key);
-      xfree (iter.value);
+      free_func (iter.value);
     }
 }
 
@@ -2542,7 +2546,7 @@ match_pcre2_regex (const void *regex, const char *str)
       pcre2_match_data_free(match_data);
     }
   else
-	  rc = PCRE2_ERROR_NOMEMORY;
+    rc = PCRE2_ERROR_NOMEMORY;
 
   if (rc < 0 && rc != PCRE2_ERROR_NOMATCH)
     {
@@ -2752,7 +2756,7 @@ wg_hex_to_string (char *str_buffer, const char *hex_buffer, size_t hex_len)
   str_buffer[2 * i] = '\0';
 }
 
-#ifdef HAVE_SSL
+#if defined(HAVE_SSL) && !defined(HAVE_WINTLS)
 
 /*
  * Public key pem to der conversion

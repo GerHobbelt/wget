@@ -76,7 +76,15 @@ AC_ARG_WITH([libpsl],
 
 dnl SSL: Configure SSL backend to use
 AC_ARG_WITH([ssl],
-  [AS_HELP_STRING([--with-ssl={gnutls,openssl,no}], [specify SSL backend. GNU TLS is the default.])])
+  [AS_HELP_STRING([--with-ssl={gnutls,openssl,wintls,no}], [specify SSL backend. *nix default: GNU TLS; Windows default: wintls.])])
+
+dnl Hashes: Configure hash functions to use
+AC_ARG_WITH([winhashes],
+  [AS_HELP_STRING([--without-winhashes], [disable windows native hash fucntions.])])
+
+dnl WinIDN: Use winidn explicitly
+AC_ARG_WITH([winidn],
+  [AS_HELP_STRING([--with-winidn], [use windows native idn fucntions.])])
 
 dnl Zlib: Configure use of zlib for compression
 AC_ARG_WITH([zlib],
@@ -170,8 +178,7 @@ AC_ARG_ENABLE([opie],
 
 AS_IF([test "x$ENABLE_OPIE" = xyes],
   [AC_DEFINE([ENABLE_OPIE], [1], [Define if you want Opie support for FTP compiled in.])],
-  []
-)
+  [])
 
 
 dnl Digest: Support for HTTP Digest Authentication
@@ -182,8 +189,7 @@ AC_ARG_ENABLE([digest],
 
 AS_IF([test "x$ENABLE_DIGEST" = xyes],
   [AC_DEFINE([ENABLE_DIGEST], [1], [Define if you want the HTTP Digest Authorization compiled in.])],
-  []
-)
+  [])
 
 
 dnl NTLM: Support for HTTP NTLM Authentication
@@ -202,8 +208,7 @@ AC_ARG_ENABLE([debug],
 
 AS_IF([test "x$ENABLE_DEBUG" = xyes],
   [AC_DEFINE([ENABLE_DEBUG], [1], [Define if you want the debug output support compiled in.])],
-  []
-)
+  [])
 
 dnl Valgrind-tests: Should test suite be run under valgrind?
 AC_ARG_ENABLE(valgrind-tests,
@@ -233,8 +238,7 @@ AS_IF([test "x$ENABLE_VALGRIND" != xno], [
 AC_ARG_ENABLE(assert,
   [AS_HELP_STRING([--enable-assert], [enable assertions in code base])],
   [ENABLE_ASSERTION=$enableval],
-  [ENABLE_ASSERTION=no]
-)
+  [ENABLE_ASSERTION=no])
 
 AS_IF([test "x$ENABLE_ASSERTION" != xyes], [
   CFLAGS="-DNDEBUG $CFLAGS"
@@ -391,7 +395,7 @@ if test -n "$WARN_CFLAGS"; then
     nw="$nw -Wcast-function-type" # gcc 8, very noisy
     nw="$nw -Wabi" # gcc 8, very noisy
     nw="$nw -Wunused-macros" # triggers in auto-generated lex css parser, #pragma doesn't work, conflicts with -Werror
-	nw="$nw -Wchkp" # Deprecated option
+    nw="$nw -Wchkp" # Deprecated option
     nw="$nw -Wswitch-enum" # Too noisy
     nw="$nw -Wswitch-default" # TODO: Enable someday. Too noisy for now
     nw="$nw -Wpedantic" # GCC 11. Too noisy, will never be supported
@@ -518,6 +522,20 @@ AS_IF([test x"$with_zlib" != xno], [
   ])
 ])
 
+dnl set default is with-ssl
+AS_IF([test x"$with_ssl" = x], [
+  case $host in
+  *-msys* | *-mingw* )
+    AC_MSG_NOTICE([default is wintls])
+    with_ssl=wintls
+    ;;
+  * )
+    AC_MSG_NOTICE([default is -lgnutls])
+    with_ssl=gnutls
+    ;;
+  esac
+])
+
 AS_IF([test x"$with_ssl" = xopenssl], [
   if [test x"$with_libssl_prefix" = x]; then
     PKG_CHECK_MODULES([OPENSSL], [openssl], [
@@ -589,46 +607,71 @@ AS_IF([test x"$with_ssl" = xopenssl], [
       fi
     ])
   fi
-], [
-  # --with-ssl is not openssl: check if it's no
-  AS_IF([test x"$with_ssl" != xno], [
-    dnl default is -lgnutls
-    with_ssl=gnutls
-
-    dnl Now actually check for -lgnutls
-    if [test x"$with_libgnutls_prefix" = x]; then
-      PKG_CHECK_MODULES([GNUTLS], [gnutls], [
-        AC_MSG_NOTICE([compiling in support for SSL via GnuTLS])
-        ssl_library="gnutls"
-        LIBS="$GNUTLS_LIBS $LIBS"
-        CFLAGS="$GNUTLS_CFLAGS -DHAVE_LIBGNUTLS $CFLAGS"
-        AC_DEFINE([HAVE_LIBGNUTLS], [1], [Define if using gnutls.])
-        ssl_found=yes
-      ])
-    fi
-    if [test x"$ssl_found" != xyes]; then
-      AC_LIB_HAVE_LINKFLAGS([gnutls], [], [
+  if [test x"$ssl_found" = xyes]; then
+    case $host_os in
+      *mingw32* )
+        dnl Use native cert store
+        LIBS+=' -lcrypt32'
+        ;;
+    esac
+  fi
+], [test x"$with_ssl" = xgnutls], [
+  dnl Now actually check for -lgnutls
+  if [test x"$with_libgnutls_prefix" = x]; then
+    PKG_CHECK_MODULES([GNUTLS], [gnutls], [
+      AC_MSG_NOTICE([compiling in support for SSL via GnuTLS])
+      ssl_library="gnutls"
+      LIBS="$GNUTLS_LIBS $LIBS"
+      CFLAGS="$GNUTLS_CFLAGS -DHAVE_LIBGNUTLS $CFLAGS"
+      AC_DEFINE([HAVE_LIBGNUTLS], [1], [Define if using gnutls.])
+      ssl_found=yes
+    ])
+  fi
+  if [test x"$ssl_found" != xyes]; then
+    AC_LIB_HAVE_LINKFLAGS([gnutls], [], [
 #include <gnutls/gnutls.h>
-      ], [gnutls_global_init()])
-      if test x"$LIBGNUTLS" != x
-      then
-        ssl_found=yes
-        AC_MSG_NOTICE([compiling in support for SSL via GnuTLS])
-        ssl_library="gnutls"
-        LIBS="$LIBGNUTLS $LIBS"
-      else
-        AC_MSG_ERROR([GnuTLS has not been found. Use --with-ssl=openssl if you explicitly want OpenSSL.])
-      fi
+    ], [gnutls_global_init()])
+    if test x"$LIBGNUTLS" != x
+    then
+      ssl_found=yes
+      AC_MSG_NOTICE([compiling in support for SSL via GnuTLS])
+      ssl_library="gnutls"
+      LIBS="$LIBGNUTLS $LIBS"
+    else
+      AC_MSG_ERROR([GnuTLS has not been found. Use --with-ssl=openssl if you explicitly want OpenSSL.])
     fi
+  fi
 
-    AC_CHECK_FUNCS(gnutls_priority_set_direct)
-  ]) # endif: --with-ssl != no?
-]) # endif: --with-ssl == openssl?
+  AC_CHECK_FUNCS(gnutls_priority_set_direct)
+], [test x"$with_ssl" = xwintls], [
+  dnl Now actually check for wintls
+  AC_MSG_CHECKING([for gdi32]) # >= XP
+  my_ac_save_LIBS=$LIBS
+  LIBS="-lgdi32 $LIBS"
+  AC_LINK_IFELSE(
+    [AC_LANG_PROGRAM(
+       [[#include <windef.h>
+         #include <wingdi.h>]],
+       [[GdiFlush();]])],
+    [dnl worked!
+    ssl_found=yes
+    ssl_library="wintls"
+    AC_DEFINE([HAVE_WINTLS], [1], [Define if using wintls.])
+    AC_MSG_RESULT([yes])],
+    [dnl failed
+    AC_MSG_RESULT(no)]
+  )
+  LIBS=$my_ac_save_LIBS
+]) # endif: --with-ssl
 
 dnl Enable NTLM if requested and if SSL is available.
 if test x"$ENABLE_NTLM" != xno
 then
   if test x"$LIBSSL" != x || test "$ac_cv_lib_ssl32_SSL_connect" = yes
+  then
+    ENABLE_NTLM=yes
+    AC_DEFINE([ENABLE_NTLM], 1, [Define if you want the NTLM authorization support compiled in.])
+  elif test x"$with_ssl" = xwintls && test "$ssl_found" = yes
   then
     ENABLE_NTLM=yes
     AC_DEFINE([ENABLE_NTLM], 1, [Define if you want the NTLM authorization support compiled in.])
@@ -656,6 +699,15 @@ then
     fi
   fi
 fi
+
+dnl
+dnl Check for winhashes
+dnl
+AS_IF([test x"$with_winhashes" != xno && test x"$OS_USED" = x"mswindows"], [
+  IS_WINHASHES="yes"
+  AC_DEFINE([HAVE_WINHASHES], [1], [Define if using winhashes.])
+  with_winhashes=yes
+])
 
 dnl **********************************************************************
 dnl Checks for IPv6
@@ -792,7 +844,17 @@ AS_IF([test "X$iri" != "Xno"],[
   fi
 ])
 
+AC_ARG_WITH(libidn, AS_HELP_STRING([--with-libidn=[DIR]],[Support IDN2008/IRIs (needs GNU libidn2 + libunicode)]),
+                                   libidn=$withval, libidn="")
+
 if test "X$iri" != "Xno"; then
+  AS_IF([test "x$with_winidn" != xno && test x"$OS_USED" = x"mswindows" && test "X$am_cv_func_iconv" = "Xyes"],
+  [
+    iri=yes
+    AC_DEFINE([ENABLE_IRI], 1, [Define if IRI support is enabled.])
+    with_libidn2=no
+  ])
+
   AS_IF([test "x$with_libidn2" != xno], [
     PKG_CHECK_MODULES([LIBIDN2], [libidn2 >= 0.14.0], [
       with_libidn2=yes
@@ -1003,6 +1065,8 @@ AM_CONDITIONAL([WITH_NTLM], [test "X$ENABLE_NTLM" = "Xyes"])
 AM_CONDITIONAL([WITH_OPIE], [test x"$ENABLE_OPIE" = x"yes"])
 AM_CONDITIONAL([WITH_OPENSSL], [test x"$ssl_library" = x"openssl"])
 AM_CONDITIONAL([WITH_GNUTLS], [test x"$ssl_library" = x"gnutls"])
+AM_CONDITIONAL([WITH_WINTLS], [test x"$ssl_library" = "xwintls"])
+AM_CONDITIONAL([WITH_WINHASHES], [test "X$IS_WINHASHES" = "Xyes"])
 
 dnl
 dnl Create output

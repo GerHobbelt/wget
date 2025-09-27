@@ -31,7 +31,6 @@ WGET_TESTS = \
  wget_ftpls_fuzzer$(EXEEXT) \
  wget_html_fuzzer$(EXEEXT) \
  wget_netrc_fuzzer$(EXEEXT) \
- wget_options_fuzzer$(EXEEXT) \
  wget_progress_fuzzer$(EXEEXT) \
  wget_read_hunk_fuzzer$(EXEEXT) \
  wget_robots_fuzzer$(EXEEXT) \
@@ -44,6 +43,7 @@ if WITH_NTLM
 endif
 
 if FUZZING
+  WGET_TESTS += wget_options_fuzzer$(EXEEXT)
   bin_PROGRAMS = $(WGET_TESTS)
   LDADD += $(LIB_FUZZING_ENGINE)
   MAIN = fuzzer.h

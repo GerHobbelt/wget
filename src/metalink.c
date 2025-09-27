@@ -34,12 +34,16 @@ as that of the covered work.  */
 #include "retr.h"
 #include "exits.h"
 #include "utils.h"
-#include "md2.h"
-#include "md4.h"
-#include "md5.h"
-#include "sha1.h"
-#include "sha256.h"
-#include "sha512.h"
+# ifdef HAVE_WINHASHES
+# include "win-hashes.h"
+# else
+# include "md2.h"
+# include "md4.h"
+# include "md5.h"
+# include "sha1.h"
+# include "sha256.h"
+# include "sha512.h"
+# endif
 #include "filename.h"
 #include "xmemdup0.h"
 #include "xstrndup.h"
@@ -373,7 +377,6 @@ retrieve_from_metalink (const metalink_t* metalink)
         {
           metalink_resource_t *mres = *mres_ptr;
           metalink_checksum_t **mchksum_ptr, *mchksum;
-          struct iri *iri;
           struct url *url;
           file_stats_t flstats;
           int url_err;
@@ -413,15 +416,15 @@ retrieve_from_metalink (const metalink_t* metalink)
           retr_err = METALINK_RETR_ERROR;
 
           /* Parse our resource URL.  */
-          iri = iri_new ();
-          set_uri_encoding (iri, opt.locale, true);
-          url = url_parse (mres->url, &url_err, iri, false);
+          url = url_new_init ();
+          url->ori_url = xstrdup (mres->url);
+          url_err = url_parse (url, true, true);
 
-          if (!url)
+          if (url_err)
             {
               logprintf (LOG_NOTQUIET, "%s: %s.\n", mres->url, url_error (url_err));
+              url_free (url);
               inform_exit_status (URLERROR);
-              iri_free (iri);
               continue;
             }
           else
@@ -479,8 +482,9 @@ retrieve_from_metalink (const metalink_t* metalink)
 
               opt.metalink_over_http = false;
               DEBUGP (("Storing to %s\n", destname));
-              retr_err = retrieve_url (url, mres->url, NULL, NULL,
-                                       NULL, NULL, opt.recursive, iri, false);
+              retr_err = retrieve_url (url, NULL, NULL,
+                                       NULL, NULL, opt.recursive, false);
+              url_free (url);
               opt.metalink_over_http = _metalink_http;
 
               /*
@@ -493,8 +497,6 @@ retrieve_from_metalink (const metalink_t* metalink)
               if (!output_stream && file_exists_p (destname, &flstats))
                 output_stream = fopen_stat (destname, "ab", &flstats);
             }
-          url_free (url);
-          iri_free (iri);
 
           if (retr_err == RETROK)
             {
@@ -560,8 +562,10 @@ retrieve_from_metalink (const metalink_t* metalink)
                   char sha1[SHA1_DIGEST_SIZE];
                   char sha1_txt[2 * SHA1_DIGEST_SIZE + 1];
 
+#ifndef HAVE_WINHASHES
                   char sha224[SHA224_DIGEST_SIZE];
                   char sha224_txt[2 * SHA224_DIGEST_SIZE + 1];
+#endif
 
                   char sha256[SHA256_DIGEST_SIZE];
                   char sha256_txt[2 * SHA256_DIGEST_SIZE + 1];
@@ -581,8 +585,10 @@ retrieve_from_metalink (const metalink_t* metalink)
                       && c_strcasecmp (mchksum->type, "md5")
                       && c_strcasecmp (mchksum->type, "sha1")
                       && c_strcasecmp (mchksum->type, "sha-1")
+#ifndef HAVE_WINHASHES
                       && c_strcasecmp (mchksum->type, "sha224")
                       && c_strcasecmp (mchksum->type, "sha-224")
+#endif
                       && c_strcasecmp (mchksum->type, "sha256")
                       && c_strcasecmp (mchksum->type, "sha-256")
                       && c_strcasecmp (mchksum->type, "sha384")
@@ -633,6 +639,7 @@ retrieve_from_metalink (const metalink_t* metalink)
                       if (!strcmp (sha1_txt, mchksum->hash))
                         hash_ok = true;
                     }
+#ifndef HAVE_WINHASHES
                   else if (c_strcasecmp (mchksum->type, "sha224") == 0
                            || c_strcasecmp (mchksum->type, "sha-224") == 0)
                     {
@@ -642,6 +649,7 @@ retrieve_from_metalink (const metalink_t* metalink)
                       if (!strcmp (sha224_txt, mchksum->hash))
                         hash_ok = true;
                     }
+#endif
                   else if (c_strcasecmp (mchksum->type, "sha256") == 0
                            || c_strcasecmp (mchksum->type, "sha-256") == 0)
                     {
@@ -895,6 +903,13 @@ gpg_skip_verification:
 #endif
       last_retr_err = retr_err == RETROK ? last_retr_err : retr_err;
 
+      /* Close before removing */
+      if (output_stream)
+        {
+          fclose (output_stream);
+          output_stream = NULL;
+        }
+
       /* Rename the file if error encountered; remove if option specified.
          Note: the file has been downloaded using *_loop. Therefore, it
          is not necessary to keep the file for continuated download.  */
@@ -902,11 +917,6 @@ gpg_skip_verification:
            && destname != NULL && file_exists_p (destname, NULL))
         {
           badhash_or_remove (destname);
-        }
-      if (output_stream)
-        {
-          fclose (output_stream);
-          output_stream = NULL;
         }
       xfree (destname);
       xfree (filename);
@@ -1162,21 +1172,16 @@ fetch_metalink_file (const char *url_str,
 
   uerr_t retr_err = URLERROR;
 
-  struct iri *iri;
-  struct url *url;
+  struct url *url = url_new_init ();
   int url_err;
 
-  /* Parse the URL.  */
-  iri = iri_new ();
-  set_uri_encoding (iri, opt.locale, true);
-  url = url_parse (url_str, &url_err, iri, false);
+  url->ori_url = xstrdup (url_str);
+  url_err = url_parse (url, true, true);
 
-  if (!url)
+  if (url_err)
     {
       logprintf (LOG_NOTQUIET, "%s: %s.\n", url_str, url_error (url_err));
-      inform_exit_status (retr_err);
-      iri_free (iri);
-      return retr_err;
+      goto cleanup;
     }
 
   output_stream = NULL;
@@ -1212,8 +1217,8 @@ fetch_metalink_file (const char *url_str,
   opt.metalink_over_http = metalink_http;
 
   DEBUGP (("Storing to %s\n", local_file));
-  retr_err = retrieve_url (url, url_str, NULL, NULL,
-                           NULL, NULL, opt.recursive, iri, false);
+  retr_err = retrieve_url (url, NULL, NULL,
+                           NULL, NULL, opt.recursive, false);
 
   if (retr_err == RETROK)
     {
@@ -1234,10 +1239,9 @@ fetch_metalink_file (const char *url_str,
   output_stream_regular = _output_stream_regular;
   output_stream = _output_stream;
 
-  inform_exit_status (retr_err);
-
-  iri_free (iri);
+cleanup:
   url_free (url);
+  inform_exit_status (retr_err);
 
   return retr_err;
 }

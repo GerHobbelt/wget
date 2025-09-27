@@ -182,6 +182,7 @@ static const char *additional_attributes[] = {
   "http-equiv",                 /* used by tag_handle_meta  */
   "name",                       /* used by tag_handle_meta  */
   "content",                    /* used by tag_handle_meta  */
+  "charset",                    /* used by tag_handle_meta  */
   "action",                     /* used by tag_handle_form  */
   "style",                      /* used by check_style_attr */
   "srcset",                     /* used by tag_handle_img */
@@ -191,7 +192,7 @@ static struct hash_table *interesting_tags;
 static struct hash_table *interesting_attributes;
 
 /* Will contains the (last) charset found in 'http-equiv=content-type'
-   meta tags  */
+   by html 4.01 or 'charset=' by html5 of meta tags.  */
 static char *meta_charset;
 
 static void
@@ -273,28 +274,47 @@ find_attr (struct taginfo *tag, const char *name, int *attrind)
 #define ATTR_SIZE(tag, attrind) \
  (tag->attrs[attrind].value_raw_size)
 
-/* Append LINK_URI to the urlpos structure that is being built.
+/* Append LINK_URL to the urlpos structure that is being built.
 
-   LINK_URI will be merged with the current document base.
+   LINK_URL will be merged with the current document base.
 */
 
 struct urlpos *
-append_url (const char *link_uri, int position, int size,
+append_url (const char *link_url, int position, int size,
             struct map_context *ctx)
 {
-  int link_has_scheme = url_has_scheme (link_uri);
+  int link_has_scheme = url_has_scheme (link_url);
   struct urlpos *newel;
   const char *base = ctx->base ? ctx->base : ctx->parent_base;
-  struct url *url;
+  char *link_url_new = NULL;
+  char *text_enc;
+  /* url is enqueued */
+  struct url *url = url_new_init ();
 
-  struct iri *iri = iri_new ();
-  set_uri_encoding (iri, opt.locale, true);
-  iri->utf8_encode = true;
+  if (ctx->text_enc && !opt.encoding_remote)
+    url->content_enc = xstrdup (ctx->text_enc);
+
+  /* Need a final assumption for transcoding.
+     Charset from headers wins Vs html meta. */
+  text_enc = ctx->text_enc ? ctx->text_enc : (char*) opt.locale;
+  url->ori_enc = xstrdup (text_enc);
+
+  /* Wget does not unescape reserved characters in URLs when following redirections. */
+  if (opt.enable_iri && strcasecmp (text_enc, ctx->parent_enc))
+    {
+      if (remote_to_utf8 (text_enc, link_url, &link_url_new))
+        {
+          link_url = link_url_new;
+          /* Have iconv, all to UTF-8 */
+          xfree (url->ori_enc);
+          url->ori_enc = xstrdup ("UTF-8");
+        }
+    }
 
   if (!base)
     {
       DEBUGP (("%s: no base, merge will use \"%s\".\n",
-               ctx->document_file, link_uri));
+               ctx->document_file, link_url));
 
       if (!link_has_scheme)
         {
@@ -304,18 +324,16 @@ append_url (const char *link_uri, int position, int size,
              a warning.  */
           logprintf (LOG_NOTQUIET,
                      _("%s: Cannot resolve incomplete link %s.\n"),
-                     ctx->document_file, link_uri);
-          iri_free (iri);
-          return NULL;
+                     ctx->document_file, link_url);
+          goto failed;
         }
 
-      url = url_parse (link_uri, NULL, iri, false);
-      if (!url)
+      url->ori_url = xstrdup (link_url);
+      if (url_parse (url, true, true))
         {
           DEBUGP (("%s: link \"%s\" doesn't parse.\n",
-                   ctx->document_file, link_uri));
-          iri_free (iri);
-          return NULL;
+                   ctx->document_file, link_url));
+          goto failed;
         }
     }
   else
@@ -323,28 +341,24 @@ append_url (const char *link_uri, int position, int size,
       /* Merge BASE with LINK_URI, but also make sure the result is
          canonicalized, i.e. that "../" have been resolved.
          (parse_url will do that for us.) */
+      char *complete_url = url_merge (base, link_url);
+      url->ori_url = xstrdup (complete_url);
+      xfree (complete_url);
 
-      char *complete_uri = uri_merge (base, link_uri);
-
-      DEBUGP (("%s: merge(%s, %s) -> %s\n",
+      DEBUGP (("%s: merge(%s, %s) -> %s (%s)\n",
                quotearg_n_style (0, escape_quoting_style, ctx->document_file),
                quote_n (1, base),
-               quote_n (2, link_uri),
-               quotearg_n_style (3, escape_quoting_style, complete_uri)));
+               quote_n (2, link_url),
+               quotearg_n_style (3, escape_quoting_style, url->ori_url),
+               url->ori_enc));
 
-      url = url_parse (complete_uri, NULL, iri, false);
-      if (!url)
+      if (url_parse (url, true, true))
         {
-          DEBUGP (("%s: merged link \"%s\" doesn't parse.\n",
-                   ctx->document_file, complete_uri));
-          xfree (complete_uri);
-          iri_free (iri);
-          return NULL;
+          DEBUGP (("%s: link \"%s\" doesn't parse.\n",
+                   ctx->document_file, url->ori_url));
+          goto failed;
         }
-      xfree (complete_uri);
     }
-
-  iri_free (iri);
 
   DEBUGP (("appending %s to urlpos.\n", quote (url->url)));
 
@@ -355,7 +369,7 @@ append_url (const char *link_uri, int position, int size,
 
   /* A URL is relative if the host is not named, and the name does not
      start with `/'.  */
-  if (!link_has_scheme && *link_uri != '/')
+  if (!link_has_scheme && *link_url != '/')
     newel->link_relative_p = 1;
   else if (link_has_scheme)
     newel->link_complete_p = 1;
@@ -383,6 +397,11 @@ append_url (const char *link_uri, int position, int size,
     }
 
   return newel;
+
+failed:
+  xfree (link_url_new);
+  url_free (url);
+  return NULL;
 }
 
 static void
@@ -495,7 +514,7 @@ tag_handle_base (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
 
   xfree (ctx->base);
   if (ctx->parent_base)
-    ctx->base = uri_merge (ctx->parent_base, newbase);
+    ctx->base = url_merge (ctx->parent_base, newbase);
   else
     ctx->base = xstrdup (newbase);
 }
@@ -578,6 +597,7 @@ tag_handle_meta (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
 {
   char *name = find_attr (tag, "name", NULL);
   char *http_equiv = find_attr (tag, "http-equiv", NULL);
+  char *charset = find_attr (tag, "charset", NULL);
 
   if (http_equiv && 0 == c_strcasecmp (http_equiv, "refresh"))
     {
@@ -640,6 +660,15 @@ tag_handle_meta (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
 
       xfree (meta_charset);
       meta_charset = mcharset;
+    }
+  else if (charset && check_encoding_name (charset))
+    {
+      /* Handle stuff like:
+         <meta charset="CHARSET">
+         This is the html5 standard. */
+
+      xfree (meta_charset);
+      meta_charset = xstrdup (charset);
     }
   else if (name && 0 == c_strcasecmp (name, "robots"))
     {
@@ -796,22 +825,54 @@ collect_tags_mapper (struct taginfo *tag, void *arg)
   }
 }
 
+bool
+set_map_context_by_url (struct map_context *ctx, struct url *url)
+{
+  bool ret = false;
+  struct url *u_parent, *u = url_new_init ();
+
+  if (opt.base_href)
+    {
+      u->ori_url = xstrdup (opt.base_href);
+      if (url_parse (u, true, true))
+        {
+          logprintf (LOG_NOTQUIET, _("base_href: Invalid URL %s\n"), opt.base_href);
+          goto cleanup;
+        }
+    }
+
+  u_parent = (url && url->url) ? url : u;
+
+  ctx->text_enc = u_parent->content_enc;
+  ctx->parent_base = u_parent->url;
+  ctx->parent_enc = u_parent->enc_type == ENC_IRI ? "UTF-8"
+                   : u_parent->enc_type == ENC_URL ? u_parent->ori_enc
+                   : opt.locale;
+
+  ret = true;
+
+cleanup:
+  url_free (u);
+  return ret;
+}
+
 /* Analyze HTML tags FILE and construct a list of URLs referenced from
    it.  It merges relative links in FILE with URL.  It is aware of
    <base href=...> and does the right thing.  */
 
 struct urlpos *
 get_urls_html_fm (const char *file, const struct file_memory *fm,
-                    const char *url, bool *meta_disallow_follow,
-                    struct iri *iri)
+                  struct url *url, bool *meta_disallow_follow)
 {
   struct map_context ctx;
   int flags;
 
-  ctx.text = fm->content;
+  if (!set_map_context_by_url (&ctx, url))
+    return NULL;
+
   ctx.head = NULL;
   ctx.base = NULL;
-  ctx.parent_base = url ? url : opt.base_href;
+  ctx.text = fm->content;
   ctx.document_file = file;
   ctx.nofollow = false;
 
@@ -833,11 +894,20 @@ get_urls_html_fm (const char *file, const struct file_memory *fm,
   map_html_tags (fm->content, fm->length, collect_tags_mapper, &ctx, flags,
                  NULL, interesting_attributes);
 
-#ifdef ENABLE_IRI
+#ifdef HAVE_ICONV
   /* Meta charset is only valid if there was no HTTP header Content-Type charset. */
   /* This is true for HTTP 1.0 and 1.1. */
-  if (iri && !iri->content_encoding && meta_charset)
-    set_content_encoding (iri, meta_charset);
+  if (url && !url->content_enc && meta_charset)
+    {
+      DEBUGP (("Encoding charset found: %s, re-parsing ...\n", meta_charset));
+      /* different charset, re-parse. ctx.text_enc == url->content_enc */
+      url->content_enc = xstrdup (meta_charset);
+      ctx.text_enc = url->content_enc;
+      free_urlpos (ctx.head);
+      ctx.head = NULL;
+      map_html_tags (fm->content, fm->length, collect_tags_mapper, &ctx, flags,
+                     NULL, interesting_attributes);
+    }
 #endif
   xfree (meta_charset);
 
@@ -851,8 +921,7 @@ get_urls_html_fm (const char *file, const struct file_memory *fm,
 }
 
 struct urlpos *
-get_urls_html (const char *file, const char *url, bool *meta_disallow_follow,
-                 struct iri *iri)
+get_urls_html (const char *file, struct url *url, bool *meta_disallow_follow)
 {
   struct urlpos *urls;
   struct file_memory *fm;
@@ -865,7 +934,7 @@ get_urls_html (const char *file, const char *url, bool *meta_disallow_follow,
     }
   DEBUGP (("Loaded %s (size %s).\n", file, number_to_static_string (fm->length)));
 
-  urls = get_urls_html_fm (file, fm, url, meta_disallow_follow, iri);
+  urls = get_urls_html_fm (file, fm, url, meta_disallow_follow);
   wget_read_file_free (fm);
   return urls;
 }
@@ -874,7 +943,7 @@ get_urls_html (const char *file, const char *url, bool *meta_disallow_follow,
    to get_urls_html, so we put it here.  */
 
 struct urlpos *
-get_urls_file (const char *file, bool *read_again)
+get_urls_file (const char *file, const char *text_enc, bool *read_again)
 {
   struct file_memory *fm;
   struct urlpos *head, *tail;
@@ -927,7 +996,7 @@ get_urls_file (const char *file, bool *read_again)
       if (opt.base_href)
         {
           /* Merge opt.base_href with URL. */
-          char *merged = uri_merge (opt.base_href, url_text);
+          char *merged = url_merge (opt.base_href, url_text);
           xfree (url_text);
           url_text = merged;
         }
@@ -939,12 +1008,16 @@ get_urls_file (const char *file, bool *read_again)
           url_text = new_url;
         }
 
-      url = url_parse (url_text, &up_error_code, NULL, false);
-      if (!url)
+      url = url_new_init ();
+      url->ori_url = xstrdup (url_text);
+      url->ori_enc = xstrdup (text_enc ? text_enc : opt.locale);
+      up_error_code = url_parse (url, true, true);
+      if (up_error_code)
         {
           logprintf (LOG_NOTQUIET, _("%s: Invalid URL %s: %s\n"),
                      file, url_text, url_error (up_error_code));
           xfree (url_text);
+          url_free (url);
           inform_exit_status (URLERROR);
           continue;
         }

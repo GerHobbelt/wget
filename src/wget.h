@@ -53,7 +53,7 @@ as that of the covered work.  */
 #endif
 
 /* Is OpenSSL or GNUTLS available? */
-#if defined HAVE_LIBSSL || defined HAVE_LIBSSL32 || defined HAVE_LIBGNUTLS
+#if defined HAVE_LIBSSL || defined HAVE_LIBSSL32 || defined HAVE_LIBGNUTLS || defined HAVE_WINTLS
 # define HAVE_SSL
 # define HAVE_HSTS /* There's no sense in enabling HSTS without SSL */
 #endif
@@ -161,7 +161,6 @@ typedef int64_t wgint;
 #include "quote.h"
 #include "quotearg.h"
 
-/* Likewise for struct iri definition */
 #include "iri.h"
 
 /* Useful macros used across the code: */
@@ -182,7 +181,7 @@ typedef int64_t wgint;
    otherwise, the result is undefined.  */
 static inline unsigned char _unhex(unsigned char c)
 {
-	return c <= '9' ? c - '0' : (c <= 'F' ? c - 'A' + 10 : c - 'a' + 10);
+   return c <= '9' ? c - '0' : (c <= 'F' ? c - 'A' + 10 : c - 'a' + 10);
 }
 #define X2DIGITS_TO_NUM(h1, h2) ((_unhex (h1) << 4) + _unhex (h2))
 
@@ -234,7 +233,20 @@ static inline unsigned char _unhex(unsigned char c)
    using printf ("0x%0*lx", PTR_FORMAT (p)).  (%p is too unpredictable;
    some implementations prepend 0x, while some don't, and most don't
    0-pad the address.)  */
-#define PTR_FORMAT(p) (int) (2 * sizeof (void *)), (unsigned long) (p)
+/* Data models
+    https://github.com/cpredef/predef/blob/master/DataModels.md
+    https://en.cppreference.com/w/c/language/arithmetic_types
+*/
+#ifdef _WIN64
+  // LLP64: 64 bits pointer while 32 bits long
+# define PTR_FORMAT(p) (int) (2 * sizeof (void *)), (unsigned long long) (p)
+#elif defined _WIN32
+  // inttypes.h
+# define PTR_FORMAT(p) (int) (2 * sizeof (void *)), (unsigned) (p)
+#else
+  // we are compiling for a 64-bit system
+# define PTR_FORMAT(p) (int) (2 * sizeof (void *)), (unsigned long) (p)
+#endif
 
 /* Find the maximum buffer length needed to print an integer of type `x'
    in base 10. 24082 / 10000 = 8*log_{10}(2).  */

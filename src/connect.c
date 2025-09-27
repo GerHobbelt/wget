@@ -273,7 +273,8 @@ connect_to_ip (const ip_address *ip, int port, const char *print)
         {
           char *str = NULL, *name;
 
-          if (opt.enable_iri && (name = idn_decode ((char *) print)) != NULL)
+          if (opt.enable_iri && strstr (print, "xn--") &&
+              (name = idn_decode ((char *) print)) != NULL)
             {
               str = aprintf ("%s (%s)", name, print);
               xfree (name);
@@ -312,6 +313,17 @@ connect_to_ip (const ip_address *ip, int port, const char *print)
       if (err < 0)
         DEBUGP (("Failed setting IPV6_V6ONLY: %s", strerror (errno)));
   }
+#ifdef WINDOWS
+  else if (sa->sa_family == AF_INET6) {
+    /* It makes support for IPv4-mapped IPv6 addresses.
+       default: true, on Windows Vista or later. */
+    int on = 0;
+    int err = setsockopt (sock, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof (on));
+    IF_DEBUG
+      if (err < 0)
+        DEBUGP (("Failed disabling IPV6_V6ONLY: %s", strerror (errno)));
+  }
+#endif
 #endif
 
   /* For very small rate limits, set the buffer size (and hence,
@@ -363,17 +375,17 @@ connect_to_ip (const ip_address *ip, int port, const char *print)
     /* Protect errno from possible modifications by close and
        logprintf.  */
     int save_errno = errno;
+    if (print)
+      logprintf (LOG_NOTQUIET, _("failed: %s.\n"), strerror (errno));
     if (sock >= 0)
       {
 #ifdef WIN32
-	/* If the connection timed out, fd_close will hang in Gnulib's
-	   close_fd_maybe_socket, inside the call to WSAEnumNetworkEvents.  */
-	if (errno != ETIMEDOUT)
+        /* If the connection timed out, fd_close will hang in Gnulib's
+           close_fd_maybe_socket, inside the call to WSAEnumNetworkEvents.  */
+        if (errno != ETIMEDOUT)
 #endif
-	  fd_close (sock);
+        fd_close (sock);
       }
-    if (print)
-      logprintf (LOG_NOTQUIET, _("failed: %s.\n"), strerror (errno));
     errno = save_errno;
     return -1;
   }

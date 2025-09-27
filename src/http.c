@@ -56,7 +56,11 @@ as that of the covered work.  */
 # include "http-ntlm.h"
 #endif
 #include "cookies.h"
-#include "md5.h"
+# ifdef HAVE_WINHASHES
+# include "win-hashes.h"
+# else
+# include "md5.h"
+# endif
 #include "convert.h"
 #include "spider.h"
 #include "warc.h"
@@ -2295,8 +2299,11 @@ set_file_timestamp (struct http_stat *hs)
       hs->orig_file_size = st.st_size;
       hs->orig_file_tstamp = st.st_mtime;
 #ifdef WINDOWS
-      /* Modification time granularity is 2 seconds for Windows, so
-          increase local time by 1 second for later comparison. */
+      /* Modification time granularity is 2 seconds for Windows (FAT drives),
+         so increase local time by 1 second for later comparison. */
+      /* Timestamps on FAT drives (<= FAT32) always end with an even number of seconds:
+         https://en.wikipedia.org/wiki/File_Allocation_Table
+         Floppy, USB drive etc. NTFS has no limit on this. */
       ++hs->orig_file_tstamp;
 #endif
       hs->timestamp_checked = true;
@@ -2313,26 +2320,36 @@ check_file_output (const struct url *u, struct http_stat *hs,
    * hstat.local_file is set by http_loop to the argument of -O. */
   if (!hs->local_file)
     {
-      char *local_file = NULL;
+      char *file_disposition = NULL;
+      char *str_u, *url_enc;
 
       /* Honor Content-Disposition whether possible. */
       if (!opt.content_disposition
           || !resp_header_copy (resp, "Content-Disposition",
                                 hdrval, hdrsize)
-          || !parse_content_disposition (hdrval, &local_file))
+          || !parse_content_disposition (hdrval, &file_disposition))
         {
           /* The Content-Disposition header is missing or broken.
            * Choose unique file name according to given URL. */
-          hs->local_file = url_file_name (u, NULL);
+          str_u = url_file_name (u, NULL);
         }
       else
         {
           DEBUGP (("Parsed filename from Content-Disposition: %s\n",
-                  local_file));
-          hs->local_file = url_file_name (u, local_file);
+                  file_disposition));
+          str_u = url_file_name (u, file_disposition);
         }
 
-      xfree (local_file);
+      url_enc = u->enc_type == ENC_IRI ? "UTF-8" : u->ori_enc;
+      if (strcasecmp (url_enc, opt.locale))
+        {
+          hs->local_file = convert_fname (str_u, url_enc, opt.locale);
+          xfree (str_u);
+        }
+      else
+        hs->local_file = str_u;
+
+      xfree (file_disposition);
     }
 
   hs->temporary = opt.delete_after || opt.spider || !acceptable (hs->local_file);
@@ -2555,7 +2572,7 @@ open_output_stream (struct http_stat *hs, int count, FILE **fp)
           *fp = fopen (hs->local_file, "ab");
 #endif /* def __VMS [else] */
         }
-      else if (ALLOW_CLOBBER || count > 0)
+      else if (ALLOW_CLOBBER || count > 1)
         {
           if (opt.unlink_requested && file_exists_p (hs->local_file, NULL))
             {
@@ -2609,8 +2626,8 @@ open_output_stream (struct http_stat *hs, int count, FILE **fp)
     *fp = output_stream;
 
   /* Print fetch message, if opt.verbose.  */
-  logprintf (LOG_VERBOSE, _("Saving to: %s\n"),
-             HYPHENP (hs->local_file) ? quote ("STDOUT") : quote (hs->local_file));
+  logprintf (LOG_VERBOSE, _("Saving to: '%s'\n"),
+             HYPHENP (hs->local_file) ? "STDOUT" : hs->local_file);
 
   return RETROK;
 }
@@ -2653,7 +2670,18 @@ metalink_from_http (const struct response *resp, const struct http_stat *hs,
 
   /* Initialize metalink file for our simple use case.  */
   if (hs->local_file)
-    mfile->name = xstrdup (hs->local_file);
+    {
+      /* Align with response. */
+      char *local_file = xstrdup (hs->local_file);
+      char *url_enc = u->content_enc ? u->content_enc : "UTF-8";
+      if (strcasecmp (url_enc, opt.locale))
+        {
+          mfile->name = convert_fname (local_file, opt.locale, url_enc);
+          xfree (local_file);
+        }
+      else
+        mfile->name = local_file;
+    }
   else
     mfile->name = url_file_name (u, NULL);
 
@@ -2818,18 +2846,18 @@ skip_content_type:
           output_stream = tmpfile ();
           if (output_stream)
             {
-              struct iri *iri = iri_new ();
-              struct url *url;
               int url_err;
+              /* If url enqueued by retrieve_tree, free after dequeued */
+              struct url *url = url_new_init ();
 
-              set_uri_encoding (iri, opt.locale, true);
-              url = url_parse (urlstr, &url_err, iri, false);
+              url->ori_url = xstrdup (urlstr);
+              url_err = url_parse (url, true, true);
 
-              if (!url)
+              if (url_err)
                 {
                   logprintf (LOG_NOTQUIET, _("When downloading signature:\n"
                                              "%s: %s.\n"), urlstr, url_error (url_err));
-                  iri_free (iri);
+                  url_free (url);
                 }
               else
                 {
@@ -2838,12 +2866,10 @@ skip_content_type:
                   uerr_t retr_err;
 
                   opt.metalink_over_http = false;
-                  retr_err = retrieve_url (url, urlstr, NULL, NULL,
-                                           NULL, NULL, false, iri, false);
-                  opt.metalink_over_http = _metalink_http;
-
+                  retr_err = retrieve_url (url, NULL, NULL,
+                                           NULL, NULL, false, false);
                   url_free (url);
-                  iri_free (iri);
+                  opt.metalink_over_http = _metalink_http;
 
                   if (retr_err == RETROK)
                     {
@@ -2856,7 +2882,7 @@ skip_content_type:
                       siglen = ftell (output_stream);
                       fseek (output_stream, 0, SEEK_SET);
 
-                      DEBUGP (("siglen=%lu\n", siglen));
+                      DEBUGP (("siglen=%" PRIuPTR "\n", siglen));
 
                       msig.signature = xmalloc (siglen + 1);
                       if (fread (msig.signature, siglen, 1, output_stream) != 1)
@@ -3160,8 +3186,8 @@ fail:
    If PROXY is non-NULL, the connection will be made to the proxy
    server, and u->url will be requested.  */
 static uerr_t
-gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
-         int *dt, struct url *proxy, struct iri *iri, int count)
+gethttp (struct url *u, struct url *original_url, struct http_stat *hs,
+         int *dt, struct url *proxy, int count)
 {
   struct request *req = NULL;
 
@@ -3567,6 +3593,39 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
        when we're done.  This means that we can register it.  */
     register_persistent (conn->host, conn->port, sock, using_ssl);
 
+  /* Detect charset for content */
+  type = resp_header_strdup (resp, "Content-Type");
+  if (type)
+    {
+      char *tmp = strchr (type, ';');
+      if (tmp)
+        {
+          char *tmp2 = tmp + 1;
+
+          while (tmp > type && c_isspace (tmp[-1]))
+            --tmp;
+          *tmp = '\0';
+
+          /* Try to get remote encoding if needed.
+             Still need it to encode the local file name correctly. */
+          /* As info. We need be aware of different charset. */
+          if (!opt.encoding_remote)
+            {
+              tmp = parse_charset (tmp2);
+              if (tmp)
+                {
+                  DEBUGP (("charset found in headers: %s\n", tmp));
+                  /* u is new; original_url will be used to for '-r'. */
+                  u->content_enc = xstrdup (tmp);
+                  original_url->content_enc = xstrdup (tmp);
+                }
+              xfree (tmp);
+            }
+        }
+    }
+
+  set_content_type (dt, type);
+
 #ifdef HAVE_METALINK
   /* We need to check for the Metalink data in the very first response
      we get from the server (before redirections, authorization, etc.).  */
@@ -3593,13 +3652,11 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
       if (warc_enabled)
         {
           int _err;
-          type = resp_header_strdup (resp, "Content-Type");
           _err = read_response_body (hs, sock, NULL, contlen, 0,
                                     chunked_transfer_encoding,
                                     u->url, warc_timestamp_str,
                                     warc_request_uuid, warc_ip, type,
                                     statcode, head);
-          xfree (type);
 
           if (_err != RETRFINISHED || hs->res < 0)
             {
@@ -3693,33 +3750,6 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
     }
 #endif
 
-  type = resp_header_strdup (resp, "Content-Type");
-  if (type)
-    {
-      char *tmp = strchr (type, ';');
-      if (tmp)
-        {
-#ifdef ENABLE_IRI
-          /* sXXXav: only needed if IRI support is enabled */
-          char *tmp2 = tmp + 1;
-#endif
-
-          while (tmp > type && c_isspace (tmp[-1]))
-            --tmp;
-          *tmp = '\0';
-
-#ifdef ENABLE_IRI
-          /* Try to get remote encoding if needed */
-          if (opt.enable_iri && !opt.encoding_remote)
-            {
-              tmp = parse_charset (tmp2);
-              if (tmp)
-                set_content_encoding (iri, tmp);
-              xfree (tmp);
-            }
-#endif
-        }
-    }
   xfree (hs->newloc);
   hs->newloc = resp_header_strdup (resp, "Location");
   xfree (hs->remote_time);
@@ -3780,8 +3810,7 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
           hs->local_encoding = ENC_NONE;
         }
 #ifdef HAVE_LIBZ
-      else if (hs->local_encoding == ENC_GZIP
-               && opt.compression != compression_none)
+      else if (hs->local_encoding == ENC_GZIP)
         {
           const char *p;
 
@@ -3948,8 +3977,6 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
           goto cleanup;
         }
     }
-
-  set_content_type (dt, type);
 
   if (opt.adjust_extension)
     {
@@ -4228,9 +4255,8 @@ check_retry_on_http_error (const int statcode)
 /* The genuine HTTP loop!  This is the part where the retrieval is
    retried, and retried, and retried, and...  */
 uerr_t
-http_loop (const struct url *u, struct url *original_url, char **newloc,
-           char **local_file, const char *referer, int *dt, struct url *proxy,
-           struct iri *iri)
+http_loop (struct url *u, struct url *original_url, char **newloc,
+           char **local_file, const char *referer, int *dt, struct url *proxy)
 {
   int count;
   bool got_head = false;         /* used for time-stamping and filename detection */
@@ -4276,8 +4302,14 @@ http_loop (const struct url *u, struct url *original_url, char **newloc,
     }
   else if (!opt.content_disposition)
     {
-      hstat.local_file =
-        url_file_name (opt.trustservernames ? u : original_url, NULL);
+      struct url *u2 = opt.trustservernames ? u : original_url;
+      char *url_enc = u2->enc_type == ENC_IRI ? "UTF-8" : u2->ori_enc;
+      char *file_u = url_file_name (u2, NULL);
+      if (strcasecmp (url_enc, opt.locale))
+        hstat.local_file = convert_fname (file_u, url_enc, opt.locale);
+      else
+        hstat.local_file = xstrdup (file_u);
+      xfree (file_u);
       got_name = true;
     }
 
@@ -4346,31 +4378,39 @@ http_loop (const struct url *u, struct url *original_url, char **newloc,
 
       if (opt.spider && !got_head)
         logprintf (LOG_VERBOSE,
-			  _("Spider mode enabled. Check if remote file exists.\n"));
+        _("Spider mode enabled. Check if remote file exists.\n"));
 
       /* Print fetch message, if opt.verbose.  */
-      if (opt.verbose)
-        {
-          char *hurl = url_string (u, URL_AUTH_HIDE_PASSWD);
-
-          if (count > 1)
-            {
-              char tmp[256];
-              sprintf (tmp, _("(try:%2d)"), count);
-              logprintf (LOG_NOTQUIET, "--%s--  %s  %s\n",
-                         tms, tmp, hurl);
-            }
-          else
-            {
-              logprintf (LOG_NOTQUIET, "--%s--  %s\n",
-                         tms, hurl);
-            }
-
+#ifdef WINDOWS
+      {
+        char *hurl = url_string (u, URL_AUTH_HIDE_PASSWD);
+#endif
+        if (opt.verbose)
+          {
+#ifndef WINDOWS
+            char *hurl = url_string (u, URL_AUTH_HIDE_PASSWD);
+#endif
+            if (count > 1)
+              {
+                char tmp[256];
+                sprintf (tmp, _("(try:%2d)"), count);
+                logprintf (LOG_NOTQUIET, "--%s--  %s  %s\n",
+                           tms, tmp, hurl);
+              }
+            else
+              {
+                logprintf (LOG_NOTQUIET, "--%s--  %s\n",
+                           tms, hurl);
+              }
+#ifndef WINDOWS
+            xfree (hurl);
+#endif
+          }
 #ifdef WINDOWS
           ws_changetitle (hurl);
-#endif
           xfree (hurl);
-        }
+      }
+#endif
 
       /* Default document type is empty.  However, if spider mode is
          on or time-stamping is employed, HEAD_ONLY commands is
@@ -4417,7 +4457,7 @@ http_loop (const struct url *u, struct url *original_url, char **newloc,
         *dt &= ~SEND_NOCACHE;
 
       /* Try fetching the document, or at least its head.  */
-      err = gethttp (u, original_url, &hstat, dt, proxy, iri, count);
+      err = gethttp (u, original_url, &hstat, dt, proxy, count);
 
       /* Time?  */
       tms = datetime_str (time (NULL));
@@ -4439,8 +4479,8 @@ http_loop (const struct url *u, struct url *original_url, char **newloc,
         case FWRITEERR: case FOPENERR:
           /* Another fatal error.  */
           logputs (LOG_VERBOSE, "\n");
-          logprintf (LOG_NOTQUIET, _("Cannot write to %s (%s).\n"),
-                     quote (hstat.local_file), strerror (errno));
+          logprintf (LOG_NOTQUIET, _("Cannot write to '%s' (%s).\n"),
+                     hstat.local_file, strerror (errno));
           ret = err;
           goto exit;
         case HOSTERR:
@@ -4489,8 +4529,8 @@ http_loop (const struct url *u, struct url *original_url, char **newloc,
         case UNLINKERR:
           /* Another fatal error.  */
           logputs (LOG_VERBOSE, "\n");
-          logprintf (LOG_NOTQUIET, _("Cannot unlink %s (%s).\n"),
-                     quote (hstat.local_file), strerror (errno));
+          logprintf (LOG_NOTQUIET, _("Cannot unlink '%s' (%s).\n"),
+                     hstat.local_file, strerror (errno));
           ret = err;
           goto exit;
         case NEWLOCATION:
@@ -4565,7 +4605,7 @@ http_loop (const struct url *u, struct url *original_url, char **newloc,
            * spider mode.
            * Don't log error if it was UTF-8 encoded because we will try
            * once unencoded. */
-          else if (opt.spider && !iri->utf8_encode)
+          else if (opt.spider && u->enc_type != ENC_IRI)
             {
               /* #### Again: ugly ugly ugly! */
               if (!hurl)
@@ -4751,9 +4791,9 @@ Remote file exists.\n\n"));
               logprintf (LOG_VERBOSE,
                          write_to_stdout
                          ? _("%s (%s) - written to stdout %s[%s/%s]\n\n")
-                         : _("%s (%s) - %s saved [%s/%s]\n\n"),
+                         : _("%s (%s) - '%s' saved [%s/%s]\n\n"),
                          tms, tmrate,
-                         write_to_stdout ? "" : quote (hstat.local_file),
+                         write_to_stdout ? "" : hstat.local_file,
                          number_to_static_string (hstat.len),
                          number_to_static_string (hstat.contlen));
               logprintf (LOG_NONVERBOSE,
@@ -4787,9 +4827,9 @@ Remote file exists.\n\n"));
                   logprintf (LOG_VERBOSE,
                              write_to_stdout
                              ? _("%s (%s) - written to stdout %s[%s]\n\n")
-                             : _("%s (%s) - %s saved [%s]\n\n"),
+                             : _("%s (%s) - '%s' saved [%s]\n\n"),
                              tms, tmrate,
-                             write_to_stdout ? "" : quote (hstat.local_file),
+                             write_to_stdout ? "" : hstat.local_file,
                              number_to_static_string (hstat.len));
                   if (!(opt.verbose || opt.quiet))
                     {
@@ -5305,6 +5345,10 @@ create_authorization_line (const char *au, const char *user,
 #endif
 #ifdef ENABLE_NTLM
     case 'N':                   /* NTLM */
+# ifdef HAVE_WINTLS
+      pconn.ntlm.host = pconn.host;
+      pconn.ntlm.port = pconn.port;
+# endif
       if (!ntlm_input (&pconn.ntlm, au))
         {
           *finished = true;

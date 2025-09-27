@@ -6,6 +6,10 @@ use warnings;
 use WgetFeature qw(iri);
 use HTTPTest;
 
+use Encode::Locale;
+use Encode::Locale qw($ENCODING_LOCALE $ENCODING_CONSOLE_IN $ENCODING_CONSOLE_OUT);
+use Encode;
+
 # cf. http://en.wikipedia.org/wiki/Latin1
 #     http://en.wikipedia.org/wiki/ISO-8859-15
 ###############################################################################
@@ -36,7 +40,7 @@ my $pageindex = <<EOF;
 </head>
 <body>
   <p>
-	Main page.
+    Main page.
   </p>
 </body>
 </html>
@@ -101,7 +105,7 @@ my %urls = (
         },
         content => "",
     },
-    '/p1_fran%C3%A7ais.html' => {	# UTF-8 encoded
+    '/p1_fran%C3%A7ais.html' => {   # UTF-8 encoded
         code => "404",
         msg => "File not found",
         headers => {
@@ -117,7 +121,7 @@ my %urls = (
         },
         content => $pagefrancais,
     },
-    '/p2_%C3%A9%C3%A9n.html' => {	# UTF-8 encoded
+    '/p2_%C3%A9%C3%A9n.html' => {   # UTF-8 encoded
         code => "200",
         msg => "Ok",
         headers => {
@@ -147,6 +151,40 @@ my $cmdline = $WgetTest::WGETPATH . " --iri --trust-server-names -i http://local
 
 my $expected_error_code = 0;
 
+my $native_encoding = $ENCODING_LOCALE;
+
+# To make the downloaded (OS encoding) to here got (maybe transcoded) the same with expected!
+# Encode::Locale::reinit() would make: locale == `locale -n`, but locale != (console_in == console_out)
+print "LC_CTYPE: " . ($ENV{'LC_CTYPE'} || "") . "\n"; # ~> wget findlocale()
+print "ENCODING_LOCALE: " . $ENCODING_LOCALE . "\n";
+print "ENCODING_CONSOLE_IN: " . $ENCODING_CONSOLE_IN . "\n";
+print "ENCODING_CONSOLE_OUT: " . $ENCODING_CONSOLE_OUT . "\n";
+
+if ($^O eq "msys" || $^O eq "cygwin") {
+    require Win32;
+    $native_encoding = "CP" . Win32::GetACP();
+    print "native encoding: " . $native_encoding . "\n";
+}
+
+sub can_transcode_to_locale
+{
+    my ($from, $str, $to) = @_;
+    my $m = Encode::encode($to, Encode::decode($from, $str));
+    return Encode::encode($from, Encode::decode($to, $m)) eq $str;
+}
+
+my $p1_out = ${ccedilla_u8};
+if (!can_transcode_to_locale("UTF-8", $p1_out, $native_encoding))
+{
+    $p1_out = "%E7";
+}
+
+my $p2_out = ${eacute_u8} . ${eacute_u8};
+if (!can_transcode_to_locale("UTF-8", $p2_out, $native_encoding))
+{
+    $p2_out = "%C3%A9%C3%A9";
+}
+
 my %expected_downloaded_files = (
     'url_list.txt' => {
         content => $urllist,
@@ -154,10 +192,10 @@ my %expected_downloaded_files = (
     'index.html' => {
         content => $pageindex,
     },
-    "p1_fran${ccedilla_l1}ais.html" => {
+    "p1_fran${p1_out}ais.html" => {
         content => $pagefrancais,
     },
-    "p2_${eacute_u8}${eacute_u8}n.html" => {
+    "p2_${p2_out}n.html" => {
         content => $pageeen,
     },
 );

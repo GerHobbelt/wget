@@ -38,10 +38,15 @@ as that of the covered work.  */
 #ifdef HAVE_ICONV
 # include <iconv.h>
 #endif
+
+#ifdef ENABLE_IRI
+#ifndef WINDOWS
 #include <idn2.h>
 #if IDN2_VERSION_NUMBER < 0x00140000
 # include <unicase.h>
 # include <unistr.h>
+#endif
+#endif
 #endif
 
 #include "utils.h"
@@ -51,6 +56,9 @@ as that of the covered work.  */
 #include "xstrndup.h"
 
 /* Note: locale encoding is kept in options struct (opt.locale) */
+
+/* Transcoding is still needed to convert remote file names to local encoded */
+#ifdef HAVE_ICONV
 
 /* Given a string containing "charset=XXX", return the encoding if found,
    or NULL otherwise */
@@ -93,10 +101,10 @@ parse_charset (const char *str)
 const char *
 find_locale (void)
 {
-	const char *encoding = nl_langinfo(CODESET);
+  const char *encoding = nl_langinfo(CODESET);
 
-	if (!encoding || !*encoding)
-		return xstrdup("ASCII");
+  if (!encoding || !*encoding)
+    return xstrdup("ASCII");
 
    return xstrdup(encoding);
 }
@@ -121,18 +129,24 @@ check_encoding_name (const char *encoding)
   return true;
 }
 
-#ifdef HAVE_ICONV
 /* Do the conversion according to the passed conversion descriptor cd. *out
    will contain the transcoded string on success. *out content is
    unspecified otherwise. */
-static bool
-do_conversion (const char *tocode, const char *fromcode, char const *in_org, size_t inlen, char **out)
+bool
+transcode (const char *tocode, const char *fromcode, char const *in, size_t inlen, char **out)
 {
   iconv_t cd;
-  /* sXXXav : hummm hard to guess... */
   size_t len, done, outlen;
-  int invalid = 0, tooshort = 0;
-  char *s, *in, *in_save;
+  int tooshort = 0;
+  char *s;
+  bool ret = false;
+
+  if (!strcasecmp (fromcode, tocode))
+    {
+      *out = strdup (in);
+      DEBUGP (("Encoding is already %s\n", tocode));
+      return true;
+    }
 
   cd = iconv_open (tocode, fromcode);
   if (cd == (iconv_t)(-1))
@@ -140,16 +154,11 @@ do_conversion (const char *tocode, const char *fromcode, char const *in_org, siz
       logprintf (LOG_VERBOSE, _("Conversion from %s to %s isn't supported\n"),
                  quote_n (0, fromcode), quote_n (1, tocode));
       *out = NULL;
-      return false;
+      return ret;
     }
 
-  /* iconv() has to work on an unescaped string */
-  in_save = in = xstrndup (in_org, inlen);
-  url_unescape_except_reserved (in);
-  inlen = strlen(in);
-
   len = outlen = inlen * 2;
-  *out = s = xmalloc (outlen + 1);
+  *out = s = xmalloc (outlen + 2); /* Unicode too */
   done = 0;
 
   for (;;)
@@ -158,35 +167,12 @@ do_conversion (const char *tocode, const char *fromcode, char const *in_org, siz
           iconv (cd, NULL, NULL, out, &outlen) != (size_t)(-1))
         {
           *out = s;
-          *(s + len - outlen - done) = '\0';
-          xfree(in_save);
-          iconv_close(cd);
-          IF_DEBUG
-          {
-            /* not not print out embedded passwords, in_org might be an URL */
-            if (!strchr(in_org, '@') && !strchr(*out, '@'))
-              debug_logprintf ("converted '%s' (%s) -> '%s' (%s)\n", in_org, fromcode, *out, tocode);
-            else
-              debug_logprintf ("logging suppressed, strings may contain password\n");
-          }
-          return true;
+          *(short*)(s + len - outlen - done) = '\0';
+          ret = true;
+          break;
         }
 
-      /* Incomplete or invalid multibyte sequence */
-      if (errno == EINVAL || errno == EILSEQ)
-        {
-          if (!invalid)
-            logprintf (LOG_VERBOSE,
-                      _("Incomplete or invalid multibyte sequence encountered\n"));
-
-          invalid++;
-          **out = *in;
-          in++;
-          inlen--;
-          (*out)++;
-          outlen--;
-        }
-      else if (errno == E2BIG) /* Output buffer full */
+      if (errno == E2BIG) /* Output buffer full */
         {
           tooshort++;
           done = len;
@@ -201,6 +187,12 @@ do_conversion (const char *tocode, const char *fromcode, char const *in_org, siz
           *out = s + done - outlen;
           outlen += inlen * 2;
         }
+      else if (errno == EINVAL || errno == EILSEQ)
+        {
+          logprintf (LOG_VERBOSE,
+                    _("Incomplete or invalid multibyte sequence encountered\n"));
+          break;
+        }
       else /* Weird, we got an unspecified error */
         {
           logprintf (LOG_VERBOSE, _("Unhandled errno %d\n"), errno);
@@ -208,31 +200,65 @@ do_conversion (const char *tocode, const char *fromcode, char const *in_org, siz
         }
     }
 
-    xfree(in_save);
-    iconv_close(cd);
-    IF_DEBUG
+  iconv_close(cd);
+
+  if (!ret)
     {
-      /* not not print out embedded passwords, in_org might be an URL */
-      if (!strchr(in_org, '@') && !strchr(*out, '@'))
-        debug_logprintf ("converted '%s' (%s) -> '%s' (%s)\n", in_org, fromcode, *out, tocode);
-      else
-        debug_logprintf ("logging suppressed, strings may contain password\n");
+      xfree (s);
+      *out = NULL;
     }
-    return false;
+
+  return ret;
 }
-#else
+
+/* Transcode only.
+   unescape/escape (reencode_escapes) in url_parse.
+*/
 static bool
-do_conversion (const char *tocode _GL_UNUSED, const char *fromcode _GL_UNUSED,
-               char const *in_org _GL_UNUSED, size_t inlen _GL_UNUSED, char **out)
+iri_transcode (const char *tocode, const char *fromcode, char const *in, size_t inlen, char **out)
 {
-  *out = NULL;
-  return false;
+  bool ret = false;
+
+  bool have_cred = strchr(in, '@');
+
+  IF_DEBUG
+  {
+    /* Do not print out embedded passwords, in might be an URL */
+    if (have_cred)
+      {
+        debug_logprintf ("Logging suppressed, strings may contain password\n");
+        debug_logprintf ("Converting: %s -> %s\n", fromcode, tocode);
+      }
+    else
+      debug_logprintf ("Converting: '%s', %s -> %s\n", in, fromcode, tocode);
+  }
+
+  ret = transcode (tocode, fromcode, in, inlen, out);
+
+  if (ret) IF_DEBUG
+  {
+    /* Do not print out embedded passwords, in might be an URL */
+    if (have_cred)
+      debug_logprintf ("Converted.\n");
+    else
+      debug_logprintf ("Converted:  '%s'\n", *out);
+  }
+
+  return ret;
 }
-#endif
+
+static bool
+iri_to_utf8 (const char *encoding, const char *str, char **new)
+{
+  if (!encoding)
+    return false;
+
+  return iri_transcode ("UTF-8", encoding, str, strlen (str), new);
+}
 
 /* Try converting string str from locale to UTF-8. Return a new string
    on success, or str on error or if conversion isn't needed. */
-const char *
+char *
 locale_to_utf8 (const char *str)
 {
   char *new;
@@ -244,20 +270,33 @@ locale_to_utf8 (const char *str)
       opt.locale = find_locale ();
     }
 
-  if (!opt.locale || !c_strcasecmp (opt.locale, "utf-8"))
-    return str;
+  iri_to_utf8 (opt.locale, (char *) str, &new);
 
-  if (do_conversion ("UTF-8", opt.locale, (char *) str, strlen ((char *) str), &new))
-    return (const char *) new;
-
-  xfree (new);
-  return str;
+  return new;
 }
+
+/* Try to transcode string str from remote encoding to UTF-8. On success, *new
+   contains the transcoded string. *new content is unspecified otherwise. */
+bool
+remote_to_utf8 (const char *encoding, const char *str, char **new)
+{
+  return iri_to_utf8 (encoding, str, new);
+}
+
+#endif
+
+#ifdef ENABLE_IRI
+
+#ifdef WINDOWS
+
+#include "win-idn.c"
+
+#else
 
 /* Try to "ASCII encode" UTF-8 host. Return the new domain on success or NULL
    on error. */
 char *
-idn_encode (const struct iri *i, const char *host)
+idn_encode (const char *encoding, const char *host)
 {
   int ret;
   char *ascii_encoded;
@@ -269,9 +308,9 @@ idn_encode (const struct iri *i, const char *host)
 #endif
 
   /* Encode to UTF-8 if not done */
-  if (!i->utf8_encode)
+  if (c_strcasecmp (encoding, "UTF-8"))
     {
-      if (!remote_to_utf8 (i, host, &utf8_encoded))
+      if (!remote_to_utf8 (encoding, host, &utf8_encoded))
           return NULL;  /* Nothing to encode or an error occurred */
       src = utf8_encoded;
     }
@@ -320,6 +359,8 @@ idn_encode (const struct iri *i, const char *host)
   return ret == IDN2_OK ? ascii_encoded : NULL;
 }
 
+#endif
+
 /* Try to decode an "ASCII encoded" host. Return the new domain in the locale
    on success or NULL on error. */
 char *
@@ -345,111 +386,4 @@ idn_decode (const char *host)
   return xstrdup(host);
 }
 
-/* Try to transcode string str from remote encoding to UTF-8. On success, *new
-   contains the transcoded string. *new content is unspecified otherwise. */
-bool
-remote_to_utf8 (const struct iri *iri, const char *str, char **new)
-{
-  bool ret = false;
-
-  if (!iri->uri_encoding)
-    return false;
-
-  /* When `i->uri_encoding' == "UTF-8" there is nothing to convert.  But we must
-     test for non-ASCII symbols for correct hostname processing in `idn_encode'
-     function. */
-  if (!c_strcasecmp (iri->uri_encoding, "UTF-8"))
-    {
-      const unsigned char *p;
-      for (p = (unsigned char *) str; *p; p++)
-        if (*p > 127)
-          {
-            *new = strdup (str);
-            return true;
-          }
-      return false;
-    }
-
-  if (do_conversion ("UTF-8", iri->uri_encoding, str, strlen (str), new))
-    ret = true;
-
-  /* Test if something was converted */
-  if (*new && !strcmp (str, *new))
-    {
-      xfree (*new);
-      return false;
-    }
-
-  return ret;
-}
-
-/* Allocate a new iri structure and return a pointer to it. */
-struct iri *
-iri_new (void)
-{
-  struct iri *i = xmalloc (sizeof *i);
-  i->uri_encoding = opt.encoding_remote ? xstrdup (opt.encoding_remote) : NULL;
-  i->content_encoding = NULL;
-  i->orig_url = NULL;
-  i->utf8_encode = opt.enable_iri;
-  return i;
-}
-
-struct iri *iri_dup (const struct iri *src)
-{
-  struct iri *i = xmalloc (sizeof *i);
-  i->uri_encoding = src->uri_encoding ? xstrdup (src->uri_encoding) : NULL;
-  i->content_encoding = (src->content_encoding ?
-                         xstrdup (src->content_encoding) : NULL);
-  i->orig_url = src->orig_url ? xstrdup (src->orig_url) : NULL;
-  i->utf8_encode = src->utf8_encode;
-  return i;
-}
-
-/* Completely free an iri structure. */
-void
-iri_free (struct iri *i)
-{
-  if (i)
-    {
-      xfree (i->uri_encoding);
-      xfree (i->content_encoding);
-      xfree (i->orig_url);
-      xfree (i);
-    }
-}
-
-/* Set uri_encoding of struct iri i. If a remote encoding was specified, use
-   it unless force is true. */
-void
-set_uri_encoding (struct iri *i, const char *charset, bool force)
-{
-  DEBUGP (("URI encoding = %s\n", charset ? quote (charset) : "None"));
-  if (!force && opt.encoding_remote)
-    return;
-  if (i->uri_encoding)
-    {
-      if (charset && !c_strcasecmp (i->uri_encoding, charset))
-        return;
-      xfree (i->uri_encoding);
-    }
-
-  i->uri_encoding = charset ? xstrdup (charset) : NULL;
-}
-
-/* Set content_encoding of struct iri i. */
-void
-set_content_encoding (struct iri *i, const char *charset)
-{
-  DEBUGP (("URI content encoding = %s\n", charset ? quote (charset) : "None"));
-  if (opt.encoding_remote)
-    return;
-  if (i->content_encoding)
-    {
-      if (charset && !c_strcasecmp (i->content_encoding, charset))
-        return;
-      xfree (i->content_encoding);
-    }
-
-  i->content_encoding = charset ? xstrdup (charset) : NULL;
-}
+#endif

@@ -51,19 +51,9 @@ DEFAULT_TESTS = \
   Test-cookie-expires.py                          \
   Test-cookie.py                                  \
   Test-Head.py                                    \
-  Test-hsts.py                                    \
-  Test-https-k.py                                 \
-  Test--https.py                                  \
-  Test--https-crl.py                              \
   Test-k.py                                       \
   Test-missing-scheme-retval.py                   \
   Test-O.py                                       \
-  Test-pinnedpubkey-der-https.py                  \
-  Test-pinnedpubkey-der-no-check-https.py         \
-  Test-pinnedpubkey-hash-https.py                 \
-  Test-pinnedpubkey-hash-no-check-fail-https.py   \
-  Test-pinnedpubkey-pem-fail-https.py             \
-  Test-pinnedpubkey-pem-https.py                  \
   Test-Post.py                                    \
   Test-recursive-basic.py                         \
   Test-recursive-include.py                       \
@@ -74,6 +64,18 @@ DEFAULT_TESTS = \
   Test-reserved-chars.py                          \
   Test--spider-r.py                               \
   Test-no_proxy-env.py
+
+HTTPS_TESTS = \
+  Test-hsts.py                                    \
+  Test-https-k.py                                 \
+  Test--https.py                                  \
+  Test--https-crl.py                              \
+  Test-pinnedpubkey-der-https.py                  \
+  Test-pinnedpubkey-der-no-check-https.py         \
+  Test-pinnedpubkey-hash-https.py                 \
+  Test-pinnedpubkey-hash-no-check-fail-https.py   \
+  Test-pinnedpubkey-pem-fail-https.py             \
+  Test-pinnedpubkey-pem-https.py
 
 METALINK_TESTS = \
   Test-metalink-http.py                        \
@@ -115,6 +117,11 @@ AM_TESTS_ENVIRONMENT = export WGETRC=/dev/null; MAKE_CHECK=True; export MAKE_CHE
 
 if WITH_SSL
   AM_TESTS_ENVIRONMENT += export SSL_TESTS=1;
+endif
+
+if WITH_WINTLS
+else
+  DEFAULT_TESTS += $(HTTPS_TESTS)
 endif
 
 if HAVE_PYTHON3

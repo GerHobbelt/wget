@@ -78,9 +78,6 @@ as that of the covered work.  */
 #ifdef WINDOWS
 # include <io.h>
 # include <fcntl.h>
-#ifndef ENABLE_NLS
-# include <mbctype.h>
-#endif
 #endif
 
 #ifdef __VMS
@@ -89,10 +86,6 @@ as that of the covered work.  */
 
 #ifndef PATH_SEPARATOR
 # define PATH_SEPARATOR '/'
-#endif
-
-#ifndef ENABLE_IRI
-struct iri dummy_iri;
 #endif
 
 #ifdef HAVE_LIBCARES
@@ -155,20 +148,31 @@ i18n_initialize (void)
   bindtextdomain ("wget", LOCALEDIR);
   bindtextdomain ("wget-gnulib", LOCALEDIR);
   textdomain ("wget");
-#elif defined WINDOWS
-  char MBCP[16] = "";
+#endif /* ENABLE_NLS */
+#ifdef WINDOWS
+  /* Windows prefer "Windows code pages" encoding. Windows code pages are also
+    sometimes referred to as "active code pages" or "system active code pages".
+    MSYS can: (`locale -i` == `locale -u` == `locale -f`) != (`locale -s` == `locale -n`)
+    OS (github action) may has: GetACP: 1252, GetOEMCP: 437, _getmbcp: 0
+    Even OS with GetACP: 936, GetOEMCP: 936, _getmbcp: 936
+    setlocale(LC_ALL, "") -> *.1252
+    setlocale(LC_ALL, ".ACP") -> *.1252
+    setlocale(LC_ALL, ".OCP") -> *.437
+    setlocale(LC_ALL, ".936") -> *.936
+    */
+  char ACP[16] = "";
   int CP;
 
-  CP = _getmbcp(); /* Consider it's different from default. */
+  CP = GetACP();
   if (CP > 0)
-    snprintf(MBCP, sizeof(MBCP), ".%d", CP);
-  setlocale(LC_ALL, MBCP);
-#endif /* ENABLE_NLS */
+    snprintf(ACP, sizeof(ACP), ".%d", CP);
+  setlocale(LC_ALL, ACP);
+#endif
 }
 
 #ifdef HAVE_HSTS
 /* make the HSTS store global */
-hsts_store_t hsts_store;
+hsts_store_t hsts_store = NULL;
 
 static char*
 get_hsts_database (void)
@@ -280,11 +284,15 @@ static struct cmdline_option option_data[] =
 #endif
     { "body-data", 0, OPT_VALUE, "bodydata", -1 },
     { "body-file", 0, OPT_VALUE, "bodyfile", -1 },
+#ifndef HAVE_WINTLS
     IF_SSL ( "ca-certificate", 0, OPT_VALUE, "cacertificate", -1 )
     IF_SSL ( "ca-directory", 0, OPT_VALUE, "cadirectory", -1 )
+#endif
     { "cache", 0, OPT_BOOLEAN, "cache", -1 },
+#ifndef HAVE_WINTLS
     IF_SSL ( "certificate", 0, OPT_VALUE, "certificate", -1 )
     IF_SSL ( "certificate-type", 0, OPT_VALUE, "certificatetype", -1 )
+#endif
     IF_SSL ( "check-certificate", 0, OPT_BOOLEAN, "checkcertificate", -1 )
     { "clobber", 0, OPT__CLOBBER, NULL, optional_argument },
 #ifdef HAVE_LIBZ
@@ -298,7 +306,9 @@ static struct cmdline_option option_data[] =
     { "content-disposition", 0, OPT_BOOLEAN, "contentdisposition", -1 },
     { "content-on-error", 0, OPT_BOOLEAN, "contentonerror", -1 },
     { "cookies", 0, OPT_BOOLEAN, "cookies", -1 },
+#ifndef HAVE_WINTLS
     IF_SSL ( "crl-file", 0, OPT_VALUE, "crlfile", -1 )
+#endif
     { "cut-dirs", 0, OPT_VALUE, "cutdirs", -1 },
     { "debug", 'd', OPT_BOOLEAN, "debug", -1 },
     { "default-page", 0, OPT_VALUE, "defaultpage", -1 },
@@ -313,7 +323,9 @@ static struct cmdline_option option_data[] =
     { "domains", 'D', OPT_VALUE, "domains", -1 },
     { "dont-remove-listing", 0, OPT__DONT_REMOVE_LISTING, NULL, no_argument },
     { "dot-style", 0, OPT_VALUE, "dotstyle", -1 }, /* deprecated */
-    { "egd-file", 0, OPT_VALUE, "egdfile", -1 },
+#ifndef HAVE_WINTLS
+    IF_SSL ( "egd-file", 0, OPT_VALUE, "egdfile", -1 )
+#endif
     { "exclude-directories", 'X', OPT_VALUE, "excludedirectories", -1 },
     { "exclude-domains", 0, OPT_VALUE, "excludedomains", -1 },
     { "execute", 'e', OPT__EXECUTE, NULL, required_argument },
@@ -383,7 +395,9 @@ static struct cmdline_option option_data[] =
     { "parent", 0, OPT__PARENT, NULL, optional_argument },
     { "passive-ftp", 0, OPT_BOOLEAN, "passiveftp", -1 },
     { "password", 0, OPT_VALUE, "password", -1 },
+#ifndef HAVE_WINTLS
     IF_SSL ( "pinnedpubkey", 0, OPT_VALUE, "pinnedpubkey", -1 )
+#endif
     { "post-data", 0, OPT_VALUE, "postdata", -1 },
     { "post-file", 0, OPT_VALUE, "postfile", -1 },
     { "prefer-family", 0, OPT_VALUE, "preferfamily", -1 },
@@ -392,8 +406,10 @@ static struct cmdline_option option_data[] =
 #endif
     { "preserve-permissions", 0, OPT_BOOLEAN, "preservepermissions", -1 },
     IF_SSL ( "ciphers", 0, OPT_VALUE, "ciphers", -1 )
+#ifndef HAVE_WINTLS
     IF_SSL ( "private-key", 0, OPT_VALUE, "privatekey", -1 )
     IF_SSL ( "private-key-type", 0, OPT_VALUE, "privatekeytype", -1 )
+#endif
     { "progress", 0, OPT_VALUE, "progress", -1 },
     { "show-progress", 0, OPT_BOOLEAN, "showprogress", -1 },
     { "protocol-directories", 0, OPT_BOOLEAN, "protocoldirectories", -1 },
@@ -404,7 +420,9 @@ static struct cmdline_option option_data[] =
     { "proxy-user", 0, OPT_VALUE, "proxyuser", -1 },
     { "quiet", 'q', OPT_BOOLEAN, "quiet", -1 },
     { "quota", 'Q', OPT_VALUE, "quota", -1 },
-    { "random-file", 0, OPT_VALUE, "randomfile", -1 },
+#ifndef HAVE_WINTLS
+    IF_SSL ( "random-file", 0, OPT_VALUE, "randomfile", -1 )
+#endif
     { "random-wait", 0, OPT_BOOLEAN, "randomwait", -1 },
     { "read-timeout", 0, OPT_VALUE, "readtimeout", -1 },
     { "recursive", 'r', OPT_BOOLEAN, "recursive", -1 },
@@ -742,9 +760,9 @@ Download:\n"),
     N_("\
        --no-iri                    turn off IRI support\n"),
     N_("\
-       --local-encoding=ENC        use ENC as the local encoding for IRIs\n"),
+       --local-encoding=ENC        use ENC as the local inputted url encoding\n"),
     N_("\
-       --remote-encoding=ENC       use ENC as the default remote encoding\n"),
+       --remote-encoding=ENC       use ENC as the default remote url encoding\n"),
     N_("\
        --unlink                    remove file before clobber\n"),
 #ifdef HAVE_METALINK
@@ -798,7 +816,7 @@ HTTP options:\n"),
        --header=STRING             insert STRING among the headers\n"),
 #ifdef HAVE_LIBZ
     N_("\
-       --compression=TYPE          choose compression, one of auto, gzip and none. (default: none)\n"),
+       --compression=TYPE          choose compression, one of auto, gzip and none\n"),
 #endif
     N_("\
        --max-redirect              maximum redirections allowed per page\n"),
@@ -853,6 +871,7 @@ HTTPS (SSL/TLS) options:\n"),
        --https-only                only follow secure HTTPS links\n"),
     N_("\
        --no-check-certificate      don't validate the server's certificate\n"),
+#ifndef HAVE_WINTLS
     N_("\
        --certificate=FILE          client certificate file\n"),
     N_("\
@@ -880,9 +899,10 @@ HTTPS (SSL/TLS) options:\n"),
     N_("\
        --egd-file=FILE             file naming the EGD socket with random data\n"),
 #endif
+#endif
     "\n",
     N_("\
-       --ciphers=STR           Set the priority string (GnuTLS) or cipher list string (OpenSSL) directly.\n\
+       --ciphers=STR               Set the priority string (GnuTLS) or cipher list string (OpenSSL/Schannel) directly.\n\
                                    Use with care. This option overrides --secure-protocol.\n\
                                    The format and syntax of this string depend on the specific SSL/TLS engine.\n"),
 #endif /* HAVE_SSL */
@@ -1252,7 +1272,9 @@ _Noreturn static void
 print_version (void)
 {
   const char *wgetrc_title  = _("Wgetrc: ");
+#ifdef ENABLE_NLS
   const char *locale_title  = _("Locale: ");
+#endif
   const char *compile_title = _("Compile: ");
   const char *link_title    = _("Link: ");
   char *env_wgetrc, *user_wgetrc;
@@ -1328,6 +1350,8 @@ print_version (void)
 
   if (printf ("\n") < 0)
     exit (WGET_EXIT_IO_FAIL);
+
+  printf ("Fork: https://github.com/lifenjoiner/wget-for-windows\n\n");
 
   /* TRANSLATORS: When available, an actual copyright character
      (circle-c) should be used in preference to "(C)". */
@@ -1690,7 +1714,7 @@ for details.\n\n"));
               logprintf (LOG_VERBOSE,
                          _("File %s already there; not retrieving.\n"),
                          quote (opt.output_document));
-              exit (WGET_EXIT_GENERIC_ERROR);
+              exit (WGET_EXIT_SUCCESS);
            }
     }
 
@@ -1889,21 +1913,19 @@ for details.\n\n"));
           }
     }
 
-#ifdef ENABLE_IRI
-  if (opt.enable_iri)
-    {
-      if (opt.locale && !check_encoding_name (opt.locale))
-        xfree (opt.locale);
+#ifdef HAVE_ICONV
+  opt.locale = find_locale ();
 
-      if (!opt.locale)
-        opt.locale = find_locale ();
+  if (opt.encoding_local && !check_encoding_name (opt.encoding_local))
+    xfree (opt.encoding_local);
 
-      if (opt.encoding_remote && !check_encoding_name (opt.encoding_remote))
-        xfree (opt.encoding_remote);
-    }
+  if (!opt.encoding_local)
+    opt.encoding_local = xstrdup (opt.locale);
+
+  if (opt.encoding_remote && !check_encoding_name (opt.encoding_remote))
+    xfree (opt.encoding_remote);
 #else
-  memset (&dummy_iri, 0, sizeof (dummy_iri));
-  if (opt.enable_iri || opt.locale || opt.encoding_remote)
+  if (opt.enable_iri || opt.encoding_local || opt.encoding_remote)
     {
       /* sXXXav : be more specific... */
       fprintf (stderr, _("This version does not have support for IRIs\n"));
@@ -2120,20 +2142,17 @@ only if outputting to a regular file.\n"));
       char *t;
       char *filename = NULL, *redirected_URL = NULL;
       int dt = 0, url_err;
-      /* Need to do a new struct iri every time, because
-       * retrieve_url may modify it in some circumstances,
-       * currently. */
-      struct iri *iri = iri_new ();
-      struct url *url_parsed;
+      /* If url enqueued by retrieve_tree, free after dequeued */
+      struct url *url = url_new_init ();
 
       t = maybe_prepend_scheme (argv[optind]);
       if (!t)
         t = argv[optind];
 
-      set_uri_encoding (iri, opt.locale, true);
-      url_parsed = url_parse (t, &url_err, iri, true);
+      url->ori_url = xstrdup (t);
 
-      if (!url_parsed)
+      url_err = url_parse (url, true, true);
+      if (url_err)
         {
           logprintf (LOG_NOTQUIET, "%s: %s.\n", t, url_error (url_err));
           inform_exit_status (URLERROR);
@@ -2142,7 +2161,7 @@ only if outputting to a regular file.\n"));
         {
           /* Request credentials if use_askpass is set. */
           if (opt.use_askpass)
-            use_askpass (url_parsed);
+            use_askpass (url);
 
           if ((opt.recursive || opt.page_requisites)
               && ((url_scheme (t) != SCHEME_FTP
@@ -2150,7 +2169,7 @@ only if outputting to a regular file.\n"));
               && url_scheme (t) != SCHEME_FTPS
 #endif
               )
-                  || url_uses_proxy (url_parsed)))
+                  || url_uses_proxy (url)))
             {
               int old_follow_ftp = opt.follow_ftp;
 
@@ -2162,14 +2181,14 @@ only if outputting to a regular file.\n"));
                   )
                 opt.follow_ftp = 1;
 
-              retrieve_tree (url_parsed, NULL);
+              retrieve_tree (url);
 
               opt.follow_ftp = old_follow_ftp;
             }
           else
             {
-              retrieve_url (url_parsed, t, &filename, &redirected_URL, NULL,
-                            &dt, opt.recursive, iri, true);
+              retrieve_url (url, &filename, &redirected_URL, NULL,
+                            &dt, opt.recursive, true);
             }
 
           if (opt.delete_after && filename != NULL && file_exists_p (filename, NULL))
@@ -2181,10 +2200,9 @@ only if outputting to a regular file.\n"));
             }
           xfree (redirected_URL);
           xfree (filename);
-          url_free (url_parsed);
         }
 
-      iri_free (iri);
+      url_free (url);
 
       if (t != argv[optind])
         xfree (t);

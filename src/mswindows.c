@@ -82,7 +82,7 @@ windows_main (char **exec_name)
     *p = '\0';
 }
 
-static void
+void
 ws_cleanup (void)
 {
   xfree (exec_name);
@@ -464,7 +464,7 @@ void
 ws_startup (void)
 {
   WSADATA data;
-  WORD requested = MAKEWORD (1, 1);
+  WORD requested = MAKEWORD (2, 2);
   int err = WSAStartup (requested, &data);
   if (err != 0)
     {
@@ -541,7 +541,7 @@ run_with_timeout (double seconds, void (*fun) (void *), void *arg)
   DWORD thread_id;
   bool rc;
 
-  DEBUGP (("seconds %.2f, ", seconds));
+  DEBUGP (("timeout: seconds %.2f\n", seconds));
 
   if (seconds == 0)
     {
@@ -568,7 +568,7 @@ run_with_timeout (double seconds, void (*fun) (void *), void *arg)
       /* Propagate error state (which is per-thread) to this thread,
          so the caller can inspect it.  */
       WSASetLastError (thread_arg.ws_error);
-      DEBUGP (("Winsock error: %d\n", WSAGetLastError ()));
+      DEBUGP (("timeout: Winsock error: %d\n", WSAGetLastError ()));
       rc = false;
     }
   else
@@ -629,26 +629,26 @@ inet_ntop (int af, const void *src, char *dst, socklen_t cnt)
 void
 set_windows_fd_as_blocking_socket (int fd)
 {
-    /* 04/2011
-     gnulib select() converts blocking sockets to nonblocking in windows
-     discussed here:
-     http://old.nabble.com/blocking-socket-is-nonblocking-after-calling-gnulib-
-     select%28%29-in-windows-td31432857.html
+  /* 04/2011
+   gnulib select() converts blocking sockets to nonblocking in windows
+   discussed here:
+   http://old.nabble.com/blocking-socket-is-nonblocking-after-calling-gnulib-
+   select%28%29-in-windows-td31432857.html
 
-     wget uses blocking sockets so we must convert them back to blocking.
-    */
-    int ret = 0;
-    int wsagle = 0;
-    const int zero = 0;
+   wget uses blocking sockets so we must convert them back to blocking.
+  */
+  int ret = 0;
+  int wsagle = 0;
+  const int zero = 0;
 
-    do
+  do
     {
-        if(wsagle == WSAEINPROGRESS)
-          Sleep(1);  /* use windows sleep */
+      if(wsagle == WSAEINPROGRESS)
+        Sleep(1);  /* use windows sleep */
 
-        WSASetLastError (0);
-        ret = ioctl (fd, FIONBIO, &zero);
-        wsagle = WSAGetLastError ();
+      WSASetLastError (0);
+      ret = ioctl (fd, FIONBIO, &zero);
+      wsagle = WSAGetLastError ();
     }
   while (ret && (wsagle == WSAEINPROGRESS));
 
@@ -656,7 +656,7 @@ set_windows_fd_as_blocking_socket (int fd)
     {
       fprintf (stderr,
                _("ioctl() failed.  The socket could not be set as blocking.\n") );
-      DEBUGP (("Winsock error: %d\n", WSAGetLastError ()));
+      DEBUGP (("Winsock error: %d\n", wsagle));
       abort ();
     }
   return;

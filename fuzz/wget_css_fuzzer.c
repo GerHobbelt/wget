@@ -50,8 +50,10 @@
 
 #include "fuzzer.h"
 
+#ifdef HAVE_FMEMOPEN
 static const uint8_t *g_data;
 static size_t g_size;
+#endif
 
 FILE *fopen_wget(const char *pathname, const char *mode)
 {
@@ -97,7 +99,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
 	struct map_context ctx = {
 		.text = (char *) data,
+		.text_enc = "iso-8859-1", // won't change
 		.parent_base = strdup("https://x.y"),
+		.parent_enc = "iso-8859-1",
 		.document_file = NULL,
 	};
 

@@ -629,7 +629,7 @@ maybe_prepend_scheme (const char *url)
   return aprintf ("http://%s", url);
 }
 
-static void split_path (const char *, char **, char **);
+static void get_local_path (struct url *url);
 
 /* Like strpbrk, with the exception that it returns the pointer to the
    terminating zero (end-of-string aka "eos") if no matching character
@@ -706,14 +706,12 @@ static const char *parse_errors[] = {
 };
 
 /* Parse a URL.
-
-   Return a new struct url if successful, NULL on error.  In case of
-   error, and if ERROR is not NULL, also set *ERROR to the appropriate
-   error code. */
-struct url *
-url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
+   transcode > escape > (unescape) idn_encode > rebuild_url
+   Return error code. */
+int
+url_parse (struct url *u, bool percent_encode, bool utf8_encode)
 {
-  struct url *u;
+  char *url = u->ori_url;
   const char *p;
   bool path_modified, host_modified;
 
@@ -730,9 +728,12 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
   int port;
   char *user = NULL, *passwd = NULL;
 
+  char *new_url = NULL;
   const char *url_encoded = NULL;
 
-  int error_code;
+  int error_code = PE_NO_ERROR;
+
+  DEBUGP (("url_parse start\n"));
 
   scheme = url_scheme (url);
   if (scheme == SCHEME_INVALID)
@@ -748,28 +749,23 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
       goto error;
     }
 
-  url_encoded = url;
-
-  if (iri && iri->utf8_encode)
+  if (opt.enable_iri && utf8_encode && remote_to_utf8 (u->ori_enc, url, &new_url))
     {
-      char *new_url = NULL;
+      url = new_url;
+      u->enc_type = ENC_IRI;
+    }
+  else
+    u->enc_type = ENC_URL;
 
-      iri->utf8_encode = remote_to_utf8 (iri, iri->orig_url ? iri->orig_url : url, &new_url);
-      if (!iri->utf8_encode)
-        new_url = NULL;
-      else
-        {
-          xfree (iri->orig_url);
-          iri->orig_url = xstrdup (url);
-          url_encoded = reencode_escapes (new_url);
-          if (url_encoded != new_url)
-            xfree (new_url);
-          percent_encode = false;
-        }
+  url_encoded = url;
+  if (percent_encode)
+    {
+      url_encoded = reencode_escapes (url);
+      DEBUGP (("Escaped url: '%s'\n", url_encoded));
     }
 
-  if (percent_encode)
-    url_encoded = reencode_escapes (url);
+  if (url == new_url && url_encoded != url)
+    xfree (new_url);
 
   p = url_encoded;
   p += strlen (supported_schemes[scheme].leading_string);
@@ -920,7 +916,6 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
         }
     }
 
-  u = xnew0 (struct url);
   u->scheme = scheme;
   u->host   = strdupdelim (host_b, host_e);
   u->port   = port;
@@ -928,8 +923,17 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
   u->passwd = passwd;
 
   u->path = strdupdelim (path_b, path_e);
+
+  if (params_b)
+    u->params = strdupdelim (params_b, params_e);
+  if (query_b)
+    u->query = strdupdelim (query_b, query_e);
+  if (fragment_b)
+    u->fragment = strdupdelim (fragment_b, fragment_e);
+
   path_modified = path_simplify (scheme, u->path);
-  split_path (u->path, &u->dir, &u->file);
+
+  get_local_path (u);
 
   host_modified = lowercase_str (u->host);
 
@@ -947,16 +951,15 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
         {
           if (c_iscntrl(*p))
             {
-              url_free(u);
               error_code = PE_INVALID_HOST_NAME;
               goto error;
             }
         }
 
-      /* Apply IDNA regardless of iri->utf8_encode status */
-      if (opt.enable_iri && iri)
+      if (opt.enable_iri)
         {
-          char *new = idn_encode (iri, u->host);
+          char *new = idn_encode (u->enc_type == ENC_IRI ? "UTF-8"
+                                  : u->ori_enc, u->host);
           if (new)
             {
               xfree (u->host);
@@ -966,14 +969,7 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
         }
     }
 
-  if (params_b)
-    u->params = strdupdelim (params_b, params_e);
-  if (query_b)
-    u->query = strdupdelim (query_b, query_e);
-  if (fragment_b)
-    u->fragment = strdupdelim (fragment_b, fragment_e);
-
-  if (opt.enable_iri || path_modified || u->fragment || host_modified || path_b == path_e)
+  if (opt.enable_iri || host_modified || path_modified || path_b == path_e || u->fragment)
     {
       /* If we suspect that a transformation has rendered what
          url_string might return different from URL_ENCODED, rebuild
@@ -991,18 +987,17 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
         u->url = (char *) url_encoded;
     }
 
-  return u;
+exit:
+  DEBUGP (("url_parse end\n"));
 
- error:
+  return error_code;
+
+error:
   /* Cleanup in case of error: */
   if (url_encoded && url_encoded != url)
     xfree (url_encoded);
 
-  /* Transmit the error code to the caller, if the caller wants to
-     know.  */
-  if (error)
-    *error = error_code;
-  return NULL;
+  goto exit;
 }
 
 /* Return the error message string from ERROR_CODE, which should have
@@ -1024,7 +1019,8 @@ url_error (int error_code)
 
    The path is split into directory (the part up to the last slash)
    and file (the part after the last slash), which are subsequently
-   unescaped.  Examples:
+   unescaped and transcoded to locale charset if possible, or escaped.
+   Examples:
 
    PATH                 DIR           FILE
    "foo/bar/baz"        "foo/bar"     "baz"
@@ -1035,21 +1031,41 @@ url_error (int error_code)
    DIR and FILE are freshly allocated.  */
 
 static void
-split_path (const char *path, char **dir, char **file)
+get_local_path (struct url *url)
 {
-  char *last_slash = strrchr (path, '/');
+  char *last_slash = strrchr (url->path, '/');
+  char *dir_u, *file_u;
+  char *dir_l, *file_l;
+  const char *from_encoding;
+
   if (!last_slash)
     {
-      *dir = xstrdup ("");
-      *file = xstrdup (path);
+      dir_u = xstrdup ("");
+      file_u = xstrdup (url->path);
     }
   else
     {
-      *dir = strdupdelim (path, last_slash);
-      *file = xstrdup (last_slash + 1);
+      dir_u = strdupdelim (url->path, last_slash);
+      file_u = xstrdup (last_slash + 1);
     }
-  url_unescape (*dir);
-  url_unescape (*file);
+
+  url_unescape (dir_u);
+  url_unescape (file_u);
+
+  from_encoding = url->enc_type == ENC_IRI ? "UTF-8"
+                  : url->enc_type == ENC_URL ? url->ori_enc
+                  : opt.locale;
+  dir_l = convert_fname (dir_u, from_encoding, opt.locale);
+  file_l = convert_fname (file_u, from_encoding, opt.locale);
+  xfree (dir_u);
+  xfree (url->dir);
+  xfree (file_u);
+  xfree (url->file);
+  url->dir = dir_l;
+  url->file = file_l;
+
+  DEBUGP (("Locale dir: '%s' (%s)\n", url->dir, opt.locale));
+  DEBUGP (("Locale file: '%s' (%s)\n", url->file, opt.locale));
 }
 
 /* Note: URL's "full path" is the path with the query string and
@@ -1156,6 +1172,10 @@ url_escape_dir (const char *dir)
 /* Sync u->path and u->url with u->dir and u->file.  Called after
    u->file or u->dir have been changed, typically by the FTP code.  */
 
+/* To solve non-English characters in filenames, the FTP protocol has been
+   extended in a backwards compatible way to use UTF-8 as the character set.
+   https://wiki.filezilla-project.org/Character_Encoding */
+
 static void
 sync_path (struct url *u)
 {
@@ -1169,8 +1189,24 @@ sync_path (struct url *u)
      path will be correctly assembled.  (u->file can contain slashes
      if the URL specifies it with %2f, or if an FTP server returns
      it.)  */
-  edir = url_escape_dir (u->dir);
-  efile = url_escape_1 (u->file, urlchr_unsafe | urlchr_reserved, 1);
+
+  if (strcasecmp (opt.locale, "UTF-8"))
+    {
+      char *dir_utf8 = locale_to_utf8 (u->dir);
+      char *file_utf8 = locale_to_utf8 (u->file);
+      edir = url_escape_dir (dir_utf8);
+      efile = url_escape_1 (file_utf8, urlchr_unsafe | urlchr_reserved, 1);
+      /* url_escape_dir: allow_passthrough, align. */
+      if (edir != dir_utf8)
+        xfree (dir_utf8);
+      if (efile != file_utf8)
+        xfree (file_utf8);
+    }
+  else
+    {
+      edir = url_escape_dir (u->dir);
+      efile = url_escape_1 (u->file, urlchr_unsafe | urlchr_reserved, 1);
+    }
 
   if (!*edir)
     newpath = xstrdup (efile);
@@ -1210,6 +1246,7 @@ url_set_dir (struct url *url, const char *newdir)
   xfree (url->dir);
   url->dir = xstrdup (newdir);
   sync_path (url);
+  DEBUGP (("url_set_dir:\ndir: %s\nfile: %s\nurl: %s\n", url->dir, url->file, url->url));
 }
 
 void
@@ -1218,6 +1255,48 @@ url_set_file (struct url *url, const char *newfile)
   xfree (url->file);
   url->file = xstrdup (newfile);
   sync_path (url);
+  DEBUGP (("url_set_file:\ndir: %s\nfile: %s\nurl: %s\n", url->dir, url->file, url->url));
+}
+
+struct url *url_new_init ()
+{
+  struct url *url = xcalloc (1, sizeof (struct url));
+
+#ifdef HAVE_ICONV
+  if (!opt.locale)
+    opt.locale = find_locale ();
+  if (opt.locale)
+    url->ori_enc = xstrdup (opt.locale);
+  if (opt.encoding_remote)
+    url->content_enc = xstrdup (opt.encoding_remote);
+#endif
+
+  return url;
+}
+
+struct url *
+url_dup (struct url *url)
+{
+  struct url *url_new = xcalloc (1, sizeof (struct url));
+#define xdupx(n, o, i) if (o->i) n->i = xstrdup (o->i);
+  xdupx (url_new, url, ori_url)
+  xdupx (url_new, url, ori_enc)
+  xdupx (url_new, url, content_enc)
+  xdupx (url_new, url, url)
+  url_new->enc_type = url->enc_type;
+  url_new->scheme = url->scheme;
+  xdupx (url_new, url, host)
+  url_new->port = url->port;
+  xdupx (url_new, url, user)
+  xdupx (url_new, url, passwd)
+  xdupx (url_new, url, path)
+  xdupx (url_new, url, params)
+  xdupx (url_new, url, query)
+  xdupx (url_new, url, fragment)
+  xdupx (url_new, url, dir)
+  xdupx (url_new, url, file)
+#undef xdupx
+  return url_new;
 }
 
 void
@@ -1225,14 +1304,20 @@ url_free (struct url *url)
 {
   if (url)
     {
+      xfree (url->ori_url);
+      xfree (url->ori_enc);
+
+      xfree (url->content_enc);
+
+      xfree (url->url);
+
       xfree (url->host);
 
       xfree (url->path);
-      xfree (url->url);
-
       xfree (url->params);
       xfree (url->query);
       xfree (url->fragment);
+
       xfree (url->user);
       xfree (url->passwd);
 
@@ -1462,7 +1547,7 @@ UVWC, VC, VC, VC,  VC, VC, VC, VC,   /* NUL SOH STX ETX  EOT ENQ ACK BEL */
    URL-escaped and will be unescaped prior to inspection.  */
 
 static void
-append_uri_pathel (const char *b, const char *e, bool escaped,
+append_url_pathel (const char *b, const char *e, bool escaped,
                    struct growable *dest)
 {
   const char *p;
@@ -1489,13 +1574,13 @@ append_uri_pathel (const char *b, const char *e, bool escaped,
   if (escaped)
     {
       size_t len = e - b;
-		if (len < sizeof (buf))
+      if (len < sizeof (buf))
         unescaped = buf;
       else
         unescaped = xmalloc(len + 1);
 
-		memcpy(unescaped, b, len);
-		unescaped[len] = 0;
+      memcpy(unescaped, b, len);
+      unescaped[len] = 0;
 
       url_unescape (unescaped);
       b = unescaped;
@@ -1554,21 +1639,21 @@ append_uri_pathel (const char *b, const char *e, bool escaped,
       for (i = 0, p = b; p < e; p++)
         {
           if (!FILE_CHAR_TEST (*p, mask))
-	    {
-	      if (i == outlen)
-	        break;
-	      *q++ = *p;
-	      i++;
-	    }
+            {
+              if (i == outlen)
+                break;
+              *q++ = *p;
+              i++;
+            }
           else if (i + 3 > outlen)
-	    break;
-	  else
+            break;
+          else
             {
               unsigned char ch = *p;
               *q++ = '%';
               *q++ = XNUM_TO_DIGIT (ch >> 4);
               *q++ = XNUM_TO_DIGIT (ch & 0xf);
-	      i += 3;
+              i += 3;
             }
         }
       assert (q - TAIL (dest) <= outlen);
@@ -1592,96 +1677,40 @@ append_uri_pathel (const char *b, const char *e, bool escaped,
   append_null (dest);
 
   if (unescaped && unescaped != buf)
-	  free (unescaped);
+    free (unescaped);
 }
 
 #ifdef HAVE_ICONV
-static char *
-convert_fname (char *fname)
+
+char *
+convert_fname (const char *fname, const char *from_encoding, const char *to_encoding)
 {
-  char *converted_fname;
-  const char *from_encoding = opt.encoding_remote;
-  const char *to_encoding = opt.locale;
-  iconv_t cd;
-  size_t len, done, inlen, outlen;
-  char *s;
-  const char *orig_fname;
+  char *out;
 
-  /* Defaults for remote and local encodings.  */
-  if (!from_encoding)
-    from_encoding = "UTF-8";
-  if (!to_encoding)
-    to_encoding = nl_langinfo (CODESET);
+  DEBUGP (("Converting file name: '%s' %s -> %s\n", fname, from_encoding, to_encoding));
 
-  cd = iconv_open (to_encoding, from_encoding);
-  if (cd == (iconv_t) (-1))
+  if (strcasecmp (from_encoding, to_encoding) == 0)
+    return xstrdup (fname);
+
+  if (transcode (to_encoding, from_encoding, fname, strlen(fname), &out))
+    DEBUGP (("Converted file name:  '%s' (%s)\n", out, to_encoding));
+  else
     {
-      logprintf (LOG_VERBOSE, _ ("Conversion from %s to %s isn't supported\n"),
-                 quote_n (0, from_encoding), quote_n (1, to_encoding));
-      return fname;
+      out = reencode_escapes (fname);
+      DEBUGP (("Converted file name: invalid chars escaped: '%s' (%s)\n", out, to_encoding));
     }
 
-  orig_fname = fname;
-  inlen = strlen (fname);
-  len = outlen = inlen * 2;
-  converted_fname = s = xmalloc (outlen + 1);
-  done = 0;
-
-  for (;;)
-    {
-      errno = 0;
-      if (iconv (cd, (ICONV_CONST char **) &fname, &inlen, &s, &outlen) == 0
-          && iconv (cd, NULL, NULL, &s, &outlen) == 0)
-        {
-          *(converted_fname + len - outlen - done) = '\0';
-          iconv_close (cd);
-          DEBUGP (("Converted file name '%s' (%s) -> '%s' (%s)\n",
-                   orig_fname, from_encoding, converted_fname, to_encoding));
-          xfree (orig_fname);
-          return converted_fname;
-        }
-
-      /* Incomplete or invalid multibyte sequence */
-      if (errno == EINVAL || errno == EILSEQ || errno == 0)
-        {
-          if (errno)
-            logprintf (LOG_VERBOSE,
-                       _ ("Incomplete or invalid multibyte sequence encountered\n"));
-          else
-            logprintf (LOG_VERBOSE,
-                       _ ("Unconvertable multibyte sequence encountered\n"));
-          xfree (converted_fname);
-          converted_fname = (char *) orig_fname;
-          break;
-        }
-      else if (errno == E2BIG) /* Output buffer full */
-        {
-          done = len;
-          len = outlen = done + inlen * 2;
-          converted_fname = xrealloc (converted_fname, outlen + 1);
-          s = converted_fname + done;
-        }
-      else /* Weird, we got an unspecified error */
-        {
-          logprintf (LOG_VERBOSE, _ ("Unhandled errno %d\n"), errno);
-          xfree (converted_fname);
-          converted_fname = (char *) orig_fname;
-          break;
-        }
-    }
-  DEBUGP (("Failed to convert file name '%s' (%s) -> '?' (%s)\n",
-           orig_fname, from_encoding, to_encoding));
-
-  iconv_close (cd);
-
-  return converted_fname;
+  return out;
 }
+
 #else
-static char *
-convert_fname (char *fname)
+
+char *
+convert_fname (const char *fname, const char *from_encoding, const char *to_encoding)
 {
-  return fname;
+  return xstrdup (fname);
 }
+
 #endif
 
 /* Append to DEST the directory structure that corresponds the
@@ -1719,12 +1748,14 @@ append_dir_structure (const struct url *u, struct growable *dest)
       if (dest->tail)
         append_char ('/', dest);
 
-      append_uri_pathel (pathel, next, true, dest);
+      append_url_pathel (pathel, next, true, dest);
     }
 }
 
 /* Return a unique file name that matches the given URL as well as
    possible.  Does not create directories on the file system.  */
+/* Result is with url encoding, as ftp server would use it besides local.
+   local <-=> UTF-8 <=-> remote */
 
 char *
 url_file_name (const struct url *u, char *replaced_filename)
@@ -1732,6 +1763,7 @@ url_file_name (const struct url *u, char *replaced_filename)
   struct growable fnres;        /* stands for "file name result" */
   struct growable temp_fnres;
 
+  char *url_enc = u->enc_type == ENC_IRI ? "UTF-8" : u->ori_enc;
   const char *u_file;
   char *fname, *unique, *fname_len_check;
   const char *index_filename = "index.html"; /* The default index file is index.html */
@@ -1751,19 +1783,20 @@ url_file_name (const struct url *u, char *replaced_filename)
 
   /* Start with the directory prefix, if specified. */
   if (opt.dir_prefix)
-    append_string (opt.dir_prefix, &fnres);
+    {
+      if (strcasecmp (url_enc, opt.locale))
+        {
+          char *prefix_local = convert_fname (opt.dir_prefix, opt.locale, url_enc);
+          append_string (prefix_local, &fnres);
+          xfree (prefix_local);
+        }
+      else
+        append_string (opt.dir_prefix, &fnres);
+    }
 
   /* If "dirstruct" is turned on (typically the case with -r), add
      the host and port (unless those have been turned off) and
      directory structure.  */
-  /* All safe remote chars are unescaped and stored in temp_fnres,
-     then converted to local and appended to fnres.
-     Internationalized URL/IDN will produce punycode to lookup IP from DNS:
-     https://en.wikipedia.org/wiki/URL
-     https://en.wikipedia.org/wiki/Internationalized_domain_name
-     Non-ASCII code chars in the path:
-     https://en.wikipedia.org/wiki/List_of_Unicode_characters
-     https://en.wikipedia.org/wiki/List_of_writing_systems */
   if (opt.dirstruct)
     {
       if (opt.protocol_directories)
@@ -1797,15 +1830,30 @@ url_file_name (const struct url *u, char *replaced_filename)
 
   if (!replaced_filename)
     {
-      /* Create the filename. */
-      u_file = *u->file ? u->file : index_filename;
+      /* Create the filename. Locale validated. */
+      char *u_file_new = NULL;
+      if (*u->file)
+        {
+          if (strcasecmp (url_enc, opt.locale))
+            {
+              u_file_new = convert_fname (u->file, opt.locale, url_enc);
+              u_file = u_file_new;
+            }
+          else
+            u_file = u->file;
+        }
+      else
+        u_file = index_filename;
 
       /* Append "?query" to the file name, even if empty,
        * and create fname_len_check. */
+      /* Escaped */
       if (u->query)
         fname_len_check = concat_strings (u_file, FN_QUERY_SEP_STR, u->query, NULL);
       else
         fname_len_check = strdupdelim (u_file, u_file + strlen (u_file));
+
+      xfree(u_file_new);
     }
   else
     {
@@ -1816,34 +1864,25 @@ url_file_name (const struct url *u, char *replaced_filename)
   if (temp_fnres.tail)
     append_char ('/', &temp_fnres);
 
-  append_uri_pathel (fname_len_check,
-    fname_len_check + strlen (fname_len_check), true, &temp_fnres);
+  append_url_pathel (fname_len_check,
+    fname_len_check + strlen (fname_len_check), false, &temp_fnres);
 
   /* Zero-terminate the temporary file name. */
   append_char ('\0', &temp_fnres);
 
-  /* convert all remote chars before length check and appending to local path */
-  fname = convert_fname (temp_fnres.base);
-  temp_fnres.base = NULL;
-  temp_fnres.size = 0;
-  temp_fnres.tail = 0;
-  append_string (fname, &temp_fnres);
-
-  xfree (fname);
   xfree (fname_len_check);
 
-  /* The filename has already been 'cleaned' by append_uri_pathel() above.  So,
+  /* The filename has already been 'cleaned' by append_url_pathel() above.  So,
    * just append it. */
   if (fnres.tail)
     append_char ('/', &fnres);
   append_string (temp_fnres.base, &fnres);
+  xfree (temp_fnres.base);
 
   fname = fnres.base;
 
   /* Make a final check that the path length is acceptable? */
   /* TODO: check fnres.base for path length problem */
-
-  xfree (temp_fnres.base);
 
   /* Check the cases in which the unique extensions are not used:
      1) Clobbering is turned off (-nc).
@@ -2007,7 +2046,7 @@ path_end (const char *url)
    url_parse has to simplify path anyway, so it's wasteful to boot.  */
 
 char *
-uri_merge (const char *base, const char *link)
+url_merge (const char *base, const char *link)
 {
   int linklength;
   const char *end;
@@ -2029,10 +2068,10 @@ uri_merge (const char *base, const char *link)
     {
       /* LINK points to the same location, but changes the query
          string.  Examples: */
-      /* uri_merge("path",         "?new") -> "path?new"     */
-      /* uri_merge("path?foo",     "?new") -> "path?new"     */
-      /* uri_merge("path?foo#bar", "?new") -> "path?new"     */
-      /* uri_merge("path#foo",     "?new") -> "path?new"     */
+      /* url_merge("path",         "?new") -> "path?new"     */
+      /* url_merge("path?foo",     "?new") -> "path?new"     */
+      /* url_merge("path?foo#bar", "?new") -> "path?new"     */
+      /* url_merge("path#foo",     "?new") -> "path?new"     */
       int baselength = end - base;
       merge = xmalloc (baselength + linklength + 1);
       memcpy (merge, base, baselength);
@@ -2041,10 +2080,10 @@ uri_merge (const char *base, const char *link)
     }
   else if (*link == '#')
     {
-      /* uri_merge("path",         "#new") -> "path#new"     */
-      /* uri_merge("path#foo",     "#new") -> "path#new"     */
-      /* uri_merge("path?foo",     "#new") -> "path?foo#new" */
-      /* uri_merge("path?foo#bar", "#new") -> "path?foo#new" */
+      /* url_merge("path",         "#new") -> "path#new"     */
+      /* url_merge("path#foo",     "#new") -> "path#new"     */
+      /* url_merge("path?foo",     "#new") -> "path?foo#new" */
+      /* url_merge("path?foo#bar", "#new") -> "path?foo#new" */
       int baselength;
       const char *end1 = strchr (base, '#');
       if (!end1)
@@ -2061,9 +2100,9 @@ uri_merge (const char *base, const char *link)
          replace everything after (and including) the double slash
          with LINK. */
 
-      /* uri_merge("foo", "//new/bar")            -> "//new/bar"      */
-      /* uri_merge("//old/foo", "//new/bar")      -> "//new/bar"      */
-      /* uri_merge("http://old/foo", "//new/bar") -> "http://new/bar" */
+      /* url_merge("foo", "//new/bar")            -> "//new/bar"      */
+      /* url_merge("//old/foo", "//new/bar")      -> "//new/bar"      */
+      /* url_merge("http://old/foo", "//new/bar") -> "http://new/bar" */
 
       int span;
       const char *slash;
@@ -2476,7 +2515,7 @@ test_path_simplify (void)
 }
 
 const char *
-test_append_uri_pathel(void)
+test_append_url_pathel(void)
 {
   unsigned i;
   static const struct {
@@ -2496,9 +2535,9 @@ test_append_uri_pathel(void)
       memset (&dest, 0, sizeof (dest));
 
       append_string (test_array[i].original_url, &dest);
-      append_uri_pathel (p, p + strlen(p), test_array[i].escaped, &dest);
+      append_url_pathel (p, p + strlen(p), test_array[i].escaped, &dest);
 
-      mu_assert ("test_append_uri_pathel: wrong result",
+      mu_assert ("test_append_url_pathel: wrong result",
                  strcmp (dest.base, test_array[i].expected_result) == 0);
       xfree (dest.base);
     }
@@ -2533,7 +2572,7 @@ test_are_urls_equal(void)
 }
 
 const char *
-test_uri_merge(void)
+test_url_merge(void)
 {
   static const struct test_data {
     const char *url;
@@ -2548,10 +2587,10 @@ test_uri_merge(void)
   for (unsigned i = 0; i < countof(test_data); ++i)
     {
       const struct test_data *t = &test_data[i];
-      char *result = uri_merge (t->url, t->link);
+      char *result = url_merge (t->url, t->link);
       bool ok = strcmp (result, t->expected) == 0;
       if (!ok)
-        return aprintf ("test_uri_merge [%u]: expected '%s', got '%s'", i, t->expected, result);
+        return aprintf ("test_url_merge [%u]: expected '%s', got '%s'", i, t->expected, result);
 
       xfree (result);
     }

@@ -43,6 +43,22 @@
 ../lib/libgnu.a:
 	cd ../lib && $(MAKE) $(AM_MAKEFLAGS)
 
+if WITH_WINTLS
+  HTTPS_TESTS =
+else
+  HTTPS_TESTS = \
+             Test-proxied-https-auth.px \
+             Test-proxied-https-auth-keepalive.px \
+             Test-https-pfs.px \
+             Test-https-tlsv1.px \
+             Test-https-tlsv1x.px \
+             Test-https-selfsigned.px \
+             Test-https-weboftrust.px \
+             Test-https-clientcert.px \
+             Test-https-crl.px \
+             Test-https-badcerts.px
+endif
+
 PX_TESTS = \
              Test-c-full.px \
              Test-c-partial.px \
@@ -105,13 +121,11 @@ PX_TESTS = \
              Test-O-nonexisting.px \
              Test-O.px \
              Test--post-file.px \
-             Test-proxied-https-auth.px \
-             Test-proxied-https-auth-keepalive.px \
              Test-proxy-auth-basic.px \
              Test-restrict-ascii.px \
              Test-Restrict-Lowercase.px \
              Test-Restrict-Uppercase.px \
-	     Test-stdouterr.px \
+             Test-stdouterr.px \
              Test--spider-fail.px \
              Test--spider.px \
              Test--spider-r-HTTP-Content-Disposition.px \
@@ -123,14 +137,7 @@ PX_TESTS = \
              Test--httpsonly-r.px \
              Test-204.px \
              Test-ftp-pasv-not-supported.px \
-             Test-https-pfs.px \
-             Test-https-tlsv1.px \
-             Test-https-tlsv1x.px \
-             Test-https-selfsigned.px \
-             Test-https-weboftrust.px \
-             Test-https-clientcert.px \
-             Test-https-crl.px \
-             Test-https-badcerts.px
+             $(HTTPS_TESTS)
 
 EXTRA_DIST = FTPServer.pm FTPTest.pm HTTPServer.pm HTTPTest.pm \
              SSLTest.pm SSLServer.pm \

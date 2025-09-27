@@ -3,6 +3,7 @@
 /.sc-start-*
 /.version
 /ABOUT-NLS
+/aminclude_static.am
 /GNUmakefile
 /INSTALL
 /Makefile
@@ -17,7 +18,6 @@
 !/lib/Makefile.am
 /maint.mk
 /gnulib_po/
-/aminclude_static.am
 # Wildcard Ignores
 *~
 po/*.gmo*
@@ -84,6 +84,9 @@ src/stamp-h1
 src/tags
 src/version.c
 src/wget
+src/wget.exe
+src/wget.ini
+src/.wget-hsts
 # testenv/
 testenv/conf/__pycache__/
 testenv/exc/__pycache__/

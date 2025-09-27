@@ -191,7 +191,7 @@ progress_update (void *progress, wgint howmuch, double dltime)
     dltime = 0;
 
   if (howmuch < 0)
-	  howmuch = 0;
+    howmuch = 0;
 
   current_impl->update (progress, howmuch, dltime);
   current_impl->draw (progress);
@@ -398,7 +398,7 @@ dot_update (void *progress, wgint howmuch, double dltime)
     dltime = 0;
 
   if (howmuch < 0)
-	  howmuch = 0;
+    howmuch = 0;
 
   struct dot_progress *dp = progress;
   dp->accumulated += howmuch;
@@ -991,10 +991,21 @@ static int count_cols (const char *mbs) { return (int) strlen(mbs); }
 static int
 cols_to_bytes (const char *mbs, const int cols, int *ncols)
 {
-  int len = strlen(mbs);
-  int ret = len < cols ? len : cols;
-  *ncols = ret;
-  return ret;
+  int len = count_cols (mbs);
+  if (len <= cols)
+    *ncols = len;
+  else
+    {
+# ifdef WINDOWS
+      /* act like rounding down */
+      int mbx = CharPrev (mbs, mbs + cols + 1) - mbs;
+      if (mbx < cols)
+        *ncols = mbx;
+      else
+# endif
+        *ncols = cols;
+    }
+  return *ncols;
 }
 #endif
 
@@ -1368,7 +1379,7 @@ bar_set_params (const char *params)
 {
 /* if run_with_timeout() will be used for read, needs to disable interactive bar,
    or  on every timeout(1s) we will have 'retry' with error "decryption failed" */
-#if (defined(HAVE_LIBSSL) || defined(HAVE_LIBSSL32)) && defined(OPENSSL_RUN_WITHTIMEOUT)
+#if (defined(HAVE_LIBSSL) || defined(HAVE_LIBSSL32)) && defined(OPENSSL_RUN_WITHTIMEOUT) || defined(HAVE_WINTLS)
   current_impl->interactive = false;
 #else
   current_impl->interactive = true;

@@ -31,8 +31,17 @@
 #
 
 
+if WITH_XATTR
+XATTR_OBJ = xattr.c
+endif
+
 # The following line is losing on some versions of make!
-DEFS     = @DEFS@ -DSYSTEM_WGETRC=\"$(sysconfdir)/wgetrc\" -DLOCALEDIR=\"$(localedir)\"
+if OS_MSWINDOWS
+DEFS_X = -DLOCALEDIR=\"./locale\"
+else
+DEFS_X = -DSYSTEM_WGETRC=\"$(sysconfdir)/wgetrc\" -DLOCALEDIR=\"$(localedir)\"
+endif
+DEFS = @DEFS@ $(DEFS_X)
 
 EXTRA_DIST = css.l css.c css_.c build_info.c.in build_info.c
 
@@ -50,9 +59,8 @@ wget_SOURCES = connect.c convert.c cookies.c ftp.c	\
 		spider.h ssl.h sysdep.h url.h warc.h utils.h wget.h	\
 		exits.h version.h
 
-if WITH_IRI
+# Escaping path and parameters is required. Punycode is optional.
 wget_SOURCES += iri.c iri.h
-endif
 
 if WITH_XATTR
 wget_SOURCES += xattr.c xattr.h
@@ -71,7 +79,11 @@ wget_SOURCES += mswindows.c mswindows.h
 endif
 
 if WITH_NTLM
+if WITH_WINTLS
+wget_SOURCES += http-ntlm-ms.c http-ntlm.h
+else
 wget_SOURCES += http-ntlm.c http-ntlm.h
+endif
 endif
 
 if WITH_OPENSSL
@@ -80,6 +92,14 @@ endif
 
 if WITH_GNUTLS
 wget_SOURCES += gnutls.c
+endif
+
+if WITH_WINTLS
+wget_SOURCES += win-sspi.c win-sspi.h wintls.c
+endif
+
+if WITH_WINHASHES
+wget_SOURCES += win-hashes.c win-hashes.h
 endif
 
 nodist_wget_SOURCES = version.c
@@ -129,6 +149,7 @@ version.c:  $(wget_SOURCES) ../lib/libgnu.a
 	    | $(ESCAPEQUOTE) >> $@
 	echo 'const char *link_string = "'$(CCLD) $(AM_CFLAGS) $(CFLAGS) \
 	$(AM_LDFLAGS) $(LDFLAGS) $(LIBS) $(wget_LDADD)'";' \
+		| sed -r ':a;s/( +-[ILl]\S+)(( .*)*\1[ "])/\2/;ta' \
 	    | $(ESCAPEQUOTE) >> $@
 
 css.c: $(srcdir)/css.l

@@ -31,6 +31,10 @@ Corresponding Source for a non-source form of such a combination
 shall include the source code for the parts of OpenSSL used as well
 as that of the covered work.  */
 
+#ifdef HAVE_WINTLS
+#include "win-sspi.h"
+#endif
+
 typedef enum {
   NTLMSTATE_NONE,
   NTLMSTATE_TYPE1,
@@ -42,7 +46,19 @@ typedef enum {
 /* Struct used for NTLM challenge-response authentication */
 struct ntlmdata {
   wgetntlm state;
+#ifdef HAVE_WINTLS
+  char *host;
+  int port;
+  CredHandle hCreds;
+  CtxtHandle hContext;
+  char *spn;
+  char *in;
+  size_t in_len;
+  char *out;
+  size_t out_len;
+#else
   unsigned char nonce[8];
+#endif
 };
 
 /* this is for ntlm header input */

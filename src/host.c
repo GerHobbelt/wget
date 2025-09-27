@@ -308,11 +308,11 @@ void
 address_list_release (struct address_list *al)
 {
   --al->refcount;
-  DEBUGP (("Releasing 0x%0*lx (new refcount %d).\n", PTR_FORMAT (al),
+  DEBUGP (("Releasing 0x%0*" PRIxPTR " (new refcount %d).\n", PTR_FORMAT (al),
            al->refcount));
   if (al->refcount <= 0)
     {
-      DEBUGP (("Deleting unused 0x%0*lx.\n", PTR_FORMAT (al)));
+      DEBUGP (("Deleting unused 0x%0*" PRIxPTR ".\n", PTR_FORMAT (al)));
       address_list_delete (al);
     }
 }
@@ -726,7 +726,11 @@ wait_ares (ares_channel channel)
       else
         tvp = ares_timeout (channel, NULL, &tv);
 
-      rc = select (nfds, &read_fds, &write_fds, NULL, tvp);
+      rc = select (nfds, &read_fds, &write_fds, NULL,
+#ifdef WINDOWS
+                   (const TIMEVAL *)
+#endif
+                   tvp);
       if (rc == 0 && timer && ptimer_measure (timer) >= opt.dns_timeout)
         ares_cancel (channel);
       else
@@ -841,7 +845,8 @@ lookup_host (const char *host, int flags)
     {
       char *str = NULL, *name;
 
-      if (opt.enable_iri && (name = idn_decode ((char *) host)) != NULL)
+      if (opt.enable_iri && strstr (host, "xn--") &&
+          (name = idn_decode ((char *) host)) != NULL)
         {
           str = aprintf ("%s (%s)", name, host);
           xfree (name);

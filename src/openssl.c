@@ -62,6 +62,30 @@ as that of the covered work.  */
 
 #ifdef WINDOWS
 # include <w32sock.h>
+//# include <wincrypt.h> // X509_NAME conflicts!
+#define PKCS_7_ASN_ENCODING     0x00010000
+
+typedef void *HCERTSTORE;
+typedef ULONG_PTR HCRYPTPROV_LEGACY;
+
+typedef struct _CERT_CONTEXT
+{
+    unsigned int dwCertEncodingType;
+    unsigned char *pbCertEncoded;
+    unsigned int cbCertEncoded;
+    void* pCertInfo;
+    void* hCertStore;
+} CERT_CONTEXT, *PCERT_CONTEXT;
+typedef CERT_CONTEXT *PCCERT_CONTEXT;
+
+HCERTSTORE WINAPI CertOpenSystemStoreA(
+    HCRYPTPROV_LEGACY hProv,
+    LPCSTR szSubsystemProtocol
+);
+PCCERT_CONTEXT WINAPI CertEnumCertificatesInStore(
+    HCERTSTORE hCertStore,
+    PCCERT_CONTEXT pPrevCertContext
+);
 #endif
 
 /* Application-wide SSL context.  This is common to all SSL
@@ -70,7 +94,7 @@ static SSL_CTX *ssl_ctx;
 
 /* Initialize the SSL's PRNG using various methods. */
 
-static void
+static int
 init_prng (void)
 {
   char namebuf[256];
@@ -107,34 +131,8 @@ init_prng (void)
     RAND_egd (opt.egd_file);
 #endif
 
-#ifdef WINDOWS
-  /* Under Windows, we can try to seed the PRNG using screen content.
-     This may or may not work, depending on whether we'll calling Wget
-     interactively.  */
-
-  RAND_screen ();
-  if (RAND_status ())
-    return;
-#endif
-
-#if 0 /* don't do this by default */
-  {
-    int maxrand = 500;
-
-    /* Still not random enough, presumably because neither /dev/random
-       nor EGD were available.  Try to seed OpenSSL's PRNG with libc
-       PRNG.  This is cryptographically weak and defeats the purpose
-       of using OpenSSL, which is why it is highly discouraged.  */
-
-    logprintf (LOG_NOTQUIET, _("WARNING: using a weak random seed.\n"));
-
-    while (RAND_status () == 0 && maxrand-- > 0)
-      {
-        unsigned char rnd = random_number (256);
-        RAND_seed (&rnd, sizeof (rnd));
-      }
-  }
-#endif
+  RAND_poll ();
+  return RAND_status ();
 }
 
 /* Print errors in the OpenSSL error stack. */
@@ -202,8 +200,7 @@ ssl_init (void)
     return true;
 
   /* Init the PRNG.  If that fails, bail out.  */
-  init_prng ();
-  if (RAND_status () != 1)
+  if (init_prng () != 1)
     {
       logprintf (LOG_NOTQUIET,
                  _("Could not seed PRNG; consider using --random-file.\n"));
@@ -327,9 +324,9 @@ ssl_init (void)
   if (!opt.tls_ciphers_string)
     {
       if (opt.secure_protocol == secure_protocol_auto)
-	      ciphers_string = "HIGH:!aNULL:!RC4:!MD5:!SRP:!PSK";
+        ciphers_string = "HIGH:!aNULL:!RC4:!MD5:!SRP:!PSK";
       else if (opt.secure_protocol == secure_protocol_pfs)
-	      ciphers_string = "HIGH:!aNULL:!RC4:!MD5:!SRP:!PSK:!kRSA";
+        ciphers_string = "HIGH:!aNULL:!RC4:!MD5:!SRP:!PSK:!kRSA";
     }
   else
     {
@@ -343,6 +340,40 @@ ssl_init (void)
     }
 
   SSL_CTX_set_default_verify_paths (ssl_ctx);
+
+  /* Start: Windows SSL Cert Changes */
+#ifdef WINDOWS
+  /* Only attempt to use the Windows store if one is not specified */
+  if (!opt.ca_cert)
+  {
+    /* Open the default Windows cert store */
+    void* hStore = CertOpenSystemStoreA(0, "ROOT");
+    if (hStore)
+    {
+      /* And then open the OpenSSL store */
+      X509_STORE * store = SSL_CTX_get_cert_store(ssl_ctx);
+      CERT_CONTEXT * pCertCtx = NULL;
+      /* Loop through all the certs in the Windows cert store */
+      for ( pCertCtx = CertEnumCertificatesInStore(hStore, NULL);
+          pCertCtx != NULL;
+          pCertCtx = CertEnumCertificatesInStore(hStore, pCertCtx) )
+      {
+        if ((pCertCtx->dwCertEncodingType & PKCS_7_ASN_ENCODING) != PKCS_7_ASN_ENCODING)
+        {
+          /* Add all certs we find to OpenSSL's store */
+          X509 *cert = d2i_X509(NULL,
+                            (const unsigned char**)&pCertCtx->pbCertEncoded,
+                            pCertCtx->cbCertEncoded);
+          X509_STORE_add_cert(store, cert);
+          X509_free(cert);
+        }
+      }
+    }
+  }
+  else
+#endif
+  /* End: Windows SSL Cert Changes */
+
   SSL_CTX_load_verify_locations (ssl_ctx, opt.ca_cert, opt.ca_directory);
 
 #ifdef X509_V_FLAG_PARTIAL_CHAIN
@@ -764,7 +795,7 @@ openssl_close (int fd, void *arg)
 
   close (fd);
 
-  DEBUGP (("Closed %d/SSL 0x%0*lx\n", fd, PTR_FORMAT (conn)));
+  DEBUGP (("Closed %d/SSL 0x%0*" PRIxPTR "\n", fd, PTR_FORMAT (conn)));
 }
 
 /* openssl_transport is the singleton that describes the SSL transport
@@ -845,11 +876,10 @@ ssl_connect_wget (int fd, const char *hostname, int *continue_session)
   SSL_set_connect_state (conn);
 
   /* Re-seed the PRNG before the SSL handshake */
-  init_prng ();
-  if (RAND_status () != 1)
+  if (init_prng () != 1)
     {
       logprintf(LOG_NOTQUIET,
-		_("WARNING: Could not seed PRNG. Consider using --random-file.\n"));
+      _("WARNING: Could not seed PRNG. Consider using --random-file.\n"));
       goto error;
     }
 
@@ -866,7 +896,7 @@ ssl_connect_wget (int fd, const char *hostname, int *continue_session)
   /* Register FD with Wget's transport layer, i.e. arrange that our
      functions are used for reading, writing, and polling.  */
   fd_register_transport (fd, &openssl_transport, ctx);
-  DEBUGP (("Handshake successful; connected socket %d to SSL handle 0x%0*lx\n",
+  DEBUGP (("Handshake successful; connected socket %d to SSL handle 0x%0*" PRIxPTR "\n",
            fd, PTR_FORMAT (conn)));
 
   ERR_clear_error ();
