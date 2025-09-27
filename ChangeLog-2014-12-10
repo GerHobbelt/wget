@@ -1217,7 +1217,7 @@
 	* src/options.h (options): Add new option noscroll
 	* src/progress.c (create_image): Update the look of the progress bar. Human
 	readable download size by default and add support for noscroll.
-	(dot_set_params, bar_set_params): Change paramter to char * since strtok
+	(dot_set_params, bar_set_params): Change parameter to char * since strtok
 	needs to modify the string.
 	(bar_set_params): Add support for noscroll parameter to bar.
 
@@ -1264,9 +1264,9 @@
 	directive to ignore unused parameter
 	* src/res.c (test_is_robots_txt_url): Fix datatypes
 	* src/retr.c (line_terminator): Add compiler directive for ignoring unused
-	paramter. Remove unused variable.
+	parameter. Remove unused variable.
 	* src/spider.h (spider_cleanup): Declare function
-	* src/test,c (main): declare unused paramter
+	* src/test,c (main): declare unused parameter
 	* src/test.h (test_*): Declare functions
 	* src/url.c (url_string): Explicit typecast of password strings
 	(run_test): Declare *test, struct tests and *expected_result as const
@@ -1320,7 +1320,7 @@
 	* src/progress.c (dot_create, print_row_stats, dot_update, dot_finish,
 	bar_finish, display_image): Output progress information through LOG_PROGRESS
 	(progress_implementation, dot_create, bar_create, progress_create): The
-	progress bar create functions accept an extra paramter for the filename of the
+	progress bar create functions accept an extra parameter for the filename of the
 	local file
 	(bar_progress): Add new variable to store filename of currently downloading
 	file
